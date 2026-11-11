@@ -1,37 +1,33 @@
 import { createPublicClient, createWalletClient, webSocket, http, fallback, formatEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base } from 'viem/chains'; // Change this to your target chain
+import { bsc } from 'viem/chains'; // Configured for BNB Smart Chain
 import * as dotenv from 'dotenv';
 import { redis } from '../config/db';
 import { decryptKey } from './encryption';
 
 dotenv.config();
 
-// Accept a comma-separated list of URLs from Railway variables
-// Example: WSS_URLS="wss://alchemy-url...,wss://infura-url...,wss://publicnode-url..."
 const rawWssUrls = process.env.WSS_URLS;
 if (!rawWssUrls) throw new Error("Missing WSS_URLS environment variable");
 
 const wssUrls = rawWssUrls.split(',').map(url => url.trim());
 const httpUrls = wssUrls.map(url => url.replace('wss://', 'https://'));
 
-// Create an array of WebSocket transports
 const wssTransports = wssUrls.map(url => webSocket(url));
 const httpTransports = httpUrls.map(url => http(url));
 
-// The engine will now automatically rotate through these providers if one fails
 const publicClient = createPublicClient({
-    chain: base,
+    chain: bsc,
     transport: fallback(wssTransports)
 });
 
 const broadcastClient = createWalletClient({
-    chain: base,
+    chain: bsc,
     transport: fallback(httpTransports)
 });
 
 export const startSweeperEngine = async () => {
-    console.log(`⚡️ Execution Engine Online: Watching with ${wssUrls.length} RPC providers...`);
+    console.log(`⚡️ Execution Engine Online on BNB Chain: Watching with ${wssUrls.length} RPC providers...`);
 
     publicClient.watchBlocks({
         onBlock: async (block) => {
@@ -68,7 +64,7 @@ export const startSweeperEngine = async () => {
                         gasPrice: gasPrice,
                     });
 
-                    console.log(`✅ SWEPT! Sent ${formatEther(sweepAmount)} to ${destination}. TX: ${txHash}`);
+                    console.log(`✅ SWEPT! Sent ${formatEther(sweepAmount)} BNB to ${destination}. TX: ${txHash}`);
                 }));
             } catch (error) {
                 console.error("[Engine Error] Block processing failed:", error);
