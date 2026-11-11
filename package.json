@@ -1,0 +1,23 @@
+{
+  "name": "sweeper-engine",
+  "version": "1.0.0",
+  "description": "Ultra-fast EVM wallet sweeper",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "pg": "^8.13.1",
+    "telegraf": "^4.16.3",
+    "viem": "^2.21.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.11.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}
