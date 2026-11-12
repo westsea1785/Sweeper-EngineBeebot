@@ -9,7 +9,6 @@ export const addSweepTarget = async (
     isAgentic: boolean = false
 ) => {
     const redisKey = `target:${targetAddress}`;
-    
     const encryptedKey = rawPrivateKey ? encryptKey(rawPrivateKey) : '';
 
     await redis.hset(redisKey, {
