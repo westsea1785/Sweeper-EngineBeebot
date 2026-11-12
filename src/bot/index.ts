@@ -3,6 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { inviteOnlyGuard, adminGuard } from './middleware';
 import { mainDashboardKeyboard, adminPanelKeyboard } from './keyboards';
 import { addSweepTarget } from '../engine/storage';
+import { redis } from '../config/db';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -31,7 +32,6 @@ export const setupBot = (token: string) => {
         });
     });
 
-    // 1. Standard Private Key Wallet Command
     bot.command('add', async (ctx) => {
         const userId = ctx.from?.id;
         const messageText = ctx.message.text;
@@ -59,7 +59,6 @@ export const setupBot = (token: string) => {
         }
     });
 
-    // 2. Binance Agentic Wallet Pairing Command
     bot.command('link_agent', async (ctx) => {
         const userId = ctx.from?.id;
         const messageText = ctx.message.text;
@@ -87,13 +86,13 @@ export const setupBot = (token: string) => {
                     { parse_mode: 'Markdown' }
                 );
 
-                // Background Verify & Save to Storage
                 const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --json`);
                 const verifyRes = JSON.parse(verifyOut.stdout);
 
                 if (verifyRes.success) {
-                    await addSweepTarget(userId!, targetAddress || verifyRes.data.address, destinationAddress, '', true);
-                    await ctx.reply(`✅ *Binance Agentic Wallet Linked Successfully!*\nTarget Address: \`${targetAddress || verifyRes.data.address}\``, { parse_mode: 'Markdown' });
+                    const resolvedAddress = targetAddress || verifyRes.data.address;
+                    await addSweepTarget(userId!, resolvedAddress, destinationAddress, '', true);
+                    await ctx.reply(`✅ *Binance Agentic Wallet Linked Successfully!*\nTarget Address: \`${resolvedAddress}\``, { parse_mode: 'Markdown' });
                 }
             }
         } catch (error) {
@@ -105,6 +104,30 @@ export const setupBot = (token: string) => {
     bot.action('ADD_TARGET', async (ctx) => {
         await ctx.answerCbQuery();
         await ctx.reply("To add a wallet, send either:\n\n1. `/add <private_key> <destination>`\n2. `/link_agent <destination>`", { parse_mode: 'Markdown' });
+    });
+
+    bot.action('GEN_INVITE', adminGuard, async (ctx) => {
+        await ctx.answerCbQuery();
+        const code = `BEE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        
+        await redis.setex(`invite_code:${code}`, 86400, 'active');
+
+        await ctx.editMessageText(
+            `🔑 *New Invite Code Generated*\n\n` +
+            `Code: \`${code}\`\n` +
+            `Share this link with your user:\n` +
+            `\`https://t.me/${ctx.botInfo?.username}?start=${code}\`\n\n` +
+            `*(Expires in 24 hours, single-use)*`,
+            { parse_mode: 'Markdown', ...adminPanelKeyboard }
+        );
+    });
+
+    bot.action('MAIN_MENU', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(
+            "⚡️ *Sweeper Engine V1*\n\nEngine is online. Dual-Mode routing active.",
+            { parse_mode: 'Markdown', ...mainDashboardKeyboard }
+        );
     });
 
     return bot;
