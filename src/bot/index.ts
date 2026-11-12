@@ -76,7 +76,14 @@ export const setupBot = (token: string) => {
         const profilePath = `/tmp/agent-profile-${userId}`;
 
         try {
-            const { stdout } = await execAsync(`npx @binance/agentic-wallet auth signin --profile ${profilePath} --json`);
+            console.log(`Executing agentic sign-in for user ${userId} with profile ${profilePath}`);
+
+            const { stdout, stderr } = await execAsync(`npx @binance/agentic-wallet auth signin --profile ${profilePath} --json`);
+            
+            if (stderr) {
+                console.error("CLI Stderr:", stderr);
+            }
+
             const res = JSON.parse(stdout);
 
             if (res.success && res.data?.urlForWeb) {
@@ -105,11 +112,11 @@ export const setupBot = (token: string) => {
                     await ctx.reply("❌ Authorization verification timed out or was rejected in the app.");
                 }
             } else {
-                await ctx.reply(`❌ Failed to start sign-in: ${res.error || 'Unknown error'}`);
+                await ctx.reply(`❌ CLI Error: ${res.error || res.message || 'Unknown response structure'}`);
             }
-        } catch (error) {
-            console.error("Agent link error:", error);
-            await ctx.reply("❌ Failed to initiate agent pairing. Ensure Developer Mode is active in your Binance App.");
+        } catch (error: any) {
+            console.error("Agent link execution error details:", error);
+            await ctx.reply(`❌ Detailed Error: ${error.message || error.toString()}`);
         }
     });
 
