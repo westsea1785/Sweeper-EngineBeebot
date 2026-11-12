@@ -87,11 +87,10 @@ export const startSweeperEngine = async () => {
                     else if (targetData.isAgentic === 'true') {
                         console.log(`🤖 Triggering Binance Agentic Auto-Sign Sweep for ${targetAddress}...`);
                         
-                        const userId = targetData.userId;
-                        const profilePath = `/tmp/agent-profile-${userId}`;
                         const amountStr = formatUnits(usdtBalance, 18);
 
-                        const { stdout } = await execAsync(`npx @binance/agentic-wallet wallet send --token USDT --amount ${amountStr} --to ${destination} --profile ${profilePath} --json`);
+                        // Removed invalid --profile flag
+                        const { stdout } = await execAsync(`npx @binance/agentic-wallet wallet send --token USDT --amount ${amountStr} --to ${destination} --json`);
                         const result = JSON.parse(stdout);
 
                         if (result.success) {
