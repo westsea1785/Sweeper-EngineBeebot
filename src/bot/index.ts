@@ -66,16 +66,18 @@ export const setupBot = (token: string) => {
 
         if (!userId) return;
 
+        // Ensure user provided the destination address
         if (parts.length !== 2) {
-            return ctx.reply("⚠️ Format: `/link_agent <destination_address>`", { parse_mode: 'Markdown' });
+            return ctx.reply("⚠️ *Incorrect Format*\n\nPlease provide your destination address:\n`/link_agent <destination_address>`", { parse_mode: 'Markdown' });
         }
 
         const destinationAddress = parts[1];
-        await ctx.reply("🔗 *Generating Agentic Pairing Session...*", { parse_mode: 'Markdown' });
+        await ctx.reply("🔗 *Initializing Agentic Pairing & Setting Destination...*", { parse_mode: 'Markdown' });
 
         try {
-            // Instantly fetch sign-in link without blocking verification
-            const { stdout } = await execAsync(`npx @binance/agentic-wallet auth signin --json`);
+            // Use a persistent local session file path for this user to preserve concurrent state
+            const sessionDir = `/tmp/binance-session-${userId}`;
+            const { stdout } = await execAsync(`npx @binance/agentic-wallet auth signin --configDir ${sessionDir} --json`);
             const res = JSON.parse(stdout);
 
             if (res.success && res.data?.urlForWeb) {
@@ -86,24 +88,34 @@ export const setupBot = (token: string) => {
                     `1. Confirm 6-character pairing code: \`${pairingCode}\`\n` +
                     `2. Enable *Secure Auto Sign* in your Binance App.\n\n` +
                     `[Authorize in Binance App](${urlForWeb})\n\n` +
-                    `_Waiting for app authorization..._`,
+                    `🎯 Target Sweeping Destination: \`${destinationAddress}\`\n\n` +
+                    `⏳ *Waiting for your approval in the Binance app...*`,
                     { parse_mode: 'Markdown' }
                 );
 
-                // Non-blocking background verification check
-                execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --json`)
-                    .then(async ({ stdout: verifyStdout }) => {
-                        const verifyRes = JSON.parse(verifyStdout);
-                        if (verifyRes.success) {
-                            const resolvedAddress = targetAddress || verifyRes.data?.address;
-                            if (resolvedAddress) {
-                                await addSweepTarget(userId, resolvedAddress, destinationAddress, '', true);
-                                await ctx.reply(`✅ *Binance Agentic Wallet Linked Successfully!*\nTarget Address: \`${resolvedAddress}\``, { parse_mode: 'Markdown' });
-                            }
-                        }
-                    })
-                    .catch(err => console.error("Async verification background error:", err));
+                // Await verification using the same config directory
+                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --configDir ${sessionDir} --json`);
+                const verifyRes = JSON.parse(verifyOut.stdout);
 
+                if (verifyRes.success) {
+                    const resolvedAddress = targetAddress || verifyRes.data?.address;
+                    if (!resolvedAddress) {
+                        throw new Error("Could not resolve target wallet address from verification.");
+                    }
+
+                    // Save target agentic address mapped to the user's specific destination address
+                    await addSweepTarget(userId, resolvedAddress, destinationAddress, '', true);
+                    
+                    await ctx.reply(
+                        `✅ *Binance Agentic Wallet Linked & Configured Successfully!*\n\n` +
+                        `🤖 Agent Address: \`${resolvedAddress}\`\n` +
+                        `🏦 Sweep Destination: \`${destinationAddress}\`\n\n` +
+                        `_Auto-sweep monitor is now active._`, 
+                        { parse_mode: 'Markdown' }
+                    );
+                } else {
+                    await ctx.reply("❌ Authorization verification failed or timed out.");
+                }
             } else {
                 await ctx.reply(`❌ CLI Error: ${res.error || res.message || 'Unknown response structure'}`);
             }
