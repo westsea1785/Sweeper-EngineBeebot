@@ -71,14 +71,13 @@ export const setupBot = (token: string) => {
         }
 
         const destinationAddress = parts[1];
-        await ctx.reply("🔗 *Initializing User-Isolated Binance Agentic Pairing...*", { parse_mode: 'Markdown' });
-
-        const profilePath = `/tmp/agent-profile-${userId}`;
+        await ctx.reply("🔗 *Initializing Binance Agentic Pairing...*", { parse_mode: 'Markdown' });
 
         try {
-            console.log(`Executing agentic sign-in for user ${userId} with profile ${profilePath}`);
+            console.log(`Executing agentic sign-in for user ${userId}`);
 
-            const { stdout, stderr } = await execAsync(`npx @binance/agentic-wallet auth signin --profile ${profilePath} --json`);
+            // Removed invalid --profile flag
+            const { stdout, stderr } = await execAsync(`npx @binance/agentic-wallet auth signin --json`);
             
             if (stderr) {
                 console.error("CLI Stderr:", stderr);
@@ -97,7 +96,7 @@ export const setupBot = (token: string) => {
                     { parse_mode: 'Markdown' }
                 );
 
-                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --profile ${profilePath} --json`);
+                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --json`);
                 const verifyRes = JSON.parse(verifyOut.stdout);
 
                 if (verifyRes.success) {
