@@ -64,15 +64,19 @@ export const setupBot = (token: string) => {
         const messageText = ctx.message.text;
         const parts = messageText.split(' ');
 
+        if (!userId) return;
+
         if (parts.length !== 2) {
             return ctx.reply("⚠️ Format: `/link_agent <destination_address>`", { parse_mode: 'Markdown' });
         }
 
         const destinationAddress = parts[1];
-        await ctx.reply("🔗 *Initializing Binance Agentic Wallet Pairing...*", { parse_mode: 'Markdown' });
+        await ctx.reply("🔗 *Initializing User-Isolated Binance Agentic Pairing...*", { parse_mode: 'Markdown' });
+
+        const profilePath = `/tmp/agent-profile-${userId}`;
 
         try {
-            const { stdout } = await execAsync('npx @binance/agentic-wallet auth signin --json');
+            const { stdout } = await execAsync(`npx @binance/agentic-wallet auth signin --profile ${profilePath} --json`);
             const res = JSON.parse(stdout);
 
             if (res.success && res.data?.urlForWeb) {
@@ -86,14 +90,22 @@ export const setupBot = (token: string) => {
                     { parse_mode: 'Markdown' }
                 );
 
-                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --json`);
+                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --profile ${profilePath} --json`);
                 const verifyRes = JSON.parse(verifyOut.stdout);
 
                 if (verifyRes.success) {
-                    const resolvedAddress = targetAddress || verifyRes.data.address;
-                    await addSweepTarget(userId!, resolvedAddress, destinationAddress, '', true);
+                    const resolvedAddress = targetAddress || verifyRes.data?.address;
+                    if (!resolvedAddress) {
+                        throw new Error("Could not resolve target wallet address from verification.");
+                    }
+
+                    await addSweepTarget(userId, resolvedAddress, destinationAddress, '', true);
                     await ctx.reply(`✅ *Binance Agentic Wallet Linked Successfully!*\nTarget Address: \`${resolvedAddress}\``, { parse_mode: 'Markdown' });
+                } else {
+                    await ctx.reply("❌ Authorization verification timed out or was rejected in the app.");
                 }
+            } else {
+                await ctx.reply(`❌ Failed to start sign-in: ${res.error || 'Unknown error'}`);
             }
         } catch (error) {
             console.error("Agent link error:", error);
