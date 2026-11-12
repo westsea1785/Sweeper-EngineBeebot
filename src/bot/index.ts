@@ -59,69 +59,40 @@ export const setupBot = (token: string) => {
         }
     });
 
-    bot.command('link_agent', async (ctx) => {
+    // Use this command for your external bot-managed agentic wallet so it never logs out!
+    bot.command('link_manual', async (ctx) => {
         const userId = ctx.from?.id;
         const messageText = ctx.message.text;
         const parts = messageText.split(' ');
 
         if (!userId) return;
 
-        // Ensure user provided the destination address
-        if (parts.length !== 2) {
-            return ctx.reply("⚠️ *Incorrect Format*\n\nPlease provide your destination address:\n`/link_agent <destination_address>`", { parse_mode: 'Markdown' });
+        if (parts.length !== 3) {
+            return ctx.reply(
+                "⚠️ *Incorrect Format*\n\n" +
+                "Since your external bot is handling the session, link your agentic wallet manually without re-signing:\n" +
+                "`/link_manual <agent_wallet_address> <destination_address>`", 
+                { parse_mode: 'Markdown' }
+            );
         }
 
-        const destinationAddress = parts[1];
-        await ctx.reply("🔗 *Initializing Agentic Pairing & Setting Destination...*", { parse_mode: 'Markdown' });
+        const targetAddress = parts[1].startsWith('0x') ? parts[1] : `0x${parts[1]}`;
+        const destinationAddress = parts[2];
 
         try {
-            // Use a persistent local session file path for this user to preserve concurrent state
-            const sessionDir = `/tmp/binance-session-${userId}`;
-            const { stdout } = await execAsync(`npx @binance/agentic-wallet auth signin --configDir ${sessionDir} --json`);
-            const res = JSON.parse(stdout);
+            // Save as agentic target without triggering auth signin (external bot stays logged in)
+            await addSweepTarget(userId, targetAddress, destinationAddress, '', true);
 
-            if (res.success && res.data?.urlForWeb) {
-                const { urlForWeb, pairingCode, qrCodeId, address: targetAddress } = res.data;
-                
-                await ctx.reply(
-                    `🔐 *Binance Agentic Wallet Pairing*\n\n` +
-                    `1. Confirm 6-character pairing code: \`${pairingCode}\`\n` +
-                    `2. Enable *Secure Auto Sign* in your Binance App.\n\n` +
-                    `[Authorize in Binance App](${urlForWeb})\n\n` +
-                    `🎯 Target Sweeping Destination: \`${destinationAddress}\`\n\n` +
-                    `⏳ *Waiting for your approval in the Binance app...*`,
-                    { parse_mode: 'Markdown' }
-                );
-
-                // Await verification using the same config directory
-                const verifyOut = await execAsync(`npx @binance/agentic-wallet auth verify --qrCodeId ${qrCodeId} --configDir ${sessionDir} --json`);
-                const verifyRes = JSON.parse(verifyOut.stdout);
-
-                if (verifyRes.success) {
-                    const resolvedAddress = targetAddress || verifyRes.data?.address;
-                    if (!resolvedAddress) {
-                        throw new Error("Could not resolve target wallet address from verification.");
-                    }
-
-                    // Save target agentic address mapped to the user's specific destination address
-                    await addSweepTarget(userId, resolvedAddress, destinationAddress, '', true);
-                    
-                    await ctx.reply(
-                        `✅ *Binance Agentic Wallet Linked & Configured Successfully!*\n\n` +
-                        `🤖 Agent Address: \`${resolvedAddress}\`\n` +
-                        `🏦 Sweep Destination: \`${destinationAddress}\`\n\n` +
-                        `_Auto-sweep monitor is now active._`, 
-                        { parse_mode: 'Markdown' }
-                    );
-                } else {
-                    await ctx.reply("❌ Authorization verification failed or timed out.");
-                }
-            } else {
-                await ctx.reply(`❌ CLI Error: ${res.error || res.message || 'Unknown response structure'}`);
-            }
+            await ctx.reply(
+                `✅ *External Agentic Wallet Linked Successfully!*\n\n` +
+                `🤖 Agent Address: \`${targetAddress}\`\n` +
+                `🏦 Sweep Destination: \`${destinationAddress}\`\n\n` +
+                `_Your external bot session remains active, and our monitoring engine will track this address._`, 
+                { parse_mode: 'Markdown' }
+            );
         } catch (error: any) {
-            console.error("Agent link execution error details:", error);
-            await ctx.reply(`❌ Detailed Error: ${error.message || error.toString()}`);
+            console.error("Manual link error:", error);
+            await ctx.reply(`❌ Failed to link target: ${error.message}`);
         }
     });
 
@@ -133,7 +104,7 @@ export const setupBot = (token: string) => {
             "📝 *Add Target Wallet*\n\n" +
             "Choose your connection method:\n\n" +
             "1️⃣ *Standard Private Key*:\n`/add <private_key> <destination>`\n\n" +
-            "2️⃣ *Binance Agentic Wallet*:\n`/link_agent <destination>`", 
+            "2️⃣ *External Agentic Wallet* (No re-signin):\n`/link_manual <agent_address> <destination>`", 
             { parse_mode: 'Markdown' }
         );
     });
@@ -145,13 +116,10 @@ export const setupBot = (token: string) => {
             "Welcome to the dual-engine automated asset router. Here is how to use the bot:\n\n" +
             "🔑 *Method A: Standard Private Key*\n" +
             "• Ideal for burner wallets.\n" +
-            "• Command: `/add <private_key> <destination_address>`\n" +
-            "• The engine automatically monitors and sweeps USDT instantly when BNB gas is available.\n\n" +
-            "🤖 *Method B: Binance Agentic Wallet*\n" +
-            "• Ideal for secure MPC/Exchange-linked setups.\n" +
-            "• Ensure *Developer Mode* is enabled in your Binance App.\n" +
-            "• Command: `/link_agent <destination_address>`\n" +
-            "• Tap the authorization link, verify your 6-digit code, and enable *Secure Auto Sign*.\n\n" +
+            "• Command: `/add <private_key> <destination_address>`\n\n" +
+            "🤖 *Method B: External Agentic Wallet*\n" +
+            "• Keeps your external bot session logged in without logging it out.\n" +
+            "• Command: `/link_manual <agent_address> <destination_address>`\n\n" +
             "🛡 *Security Note:* All private keys are strongly encrypted at rest using AES-256.",
             { parse_mode: 'Markdown' }
         );
