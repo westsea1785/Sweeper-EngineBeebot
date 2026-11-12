@@ -114,6 +114,25 @@ export const setupBot = (token: string) => {
         );
     });
 
+    bot.action('USER_GUIDE', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            "📖 *Sweeper Engine User Guide*\n\n" +
+            "Welcome to the dual-engine automated asset router. Here is how to use the bot:\n\n" +
+            "🔑 *Method A: Standard Private Key*\n" +
+            "• Ideal for burner wallets.\n" +
+            "• Command: `/add <private_key> <destination_address>`\n" +
+            "• The engine automatically monitors and sweeps USDT instantly when BNB gas is available.\n\n" +
+            "🤖 *Method B: Binance Agentic Wallet*\n" +
+            "• Ideal for secure MPC/Exchange-linked setups.\n" +
+            "• Ensure *Developer Mode* is enabled in your Binance App.\n" +
+            "• Command: `/link_agent <destination_address>`\n" +
+            "• Tap the authorization link, verify your 6-digit code, and enable *Secure Auto Sign*.\n\n" +
+            "🛡 *Security Note:* All private keys are strongly encrypted at rest using AES-256.",
+            { parse_mode: 'Markdown' }
+        );
+    });
+
     bot.action('SETTINGS', async (ctx) => {
         await ctx.answerCbQuery();
         await ctx.reply(
