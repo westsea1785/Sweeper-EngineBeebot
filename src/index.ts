@@ -2,6 +2,7 @@ import http from 'node:http';
 import { ENV } from './config/env';
 import { migrate } from './config/db';
 import { buildBot } from './bot';
+import { setBotUsername } from './bot/state';
 import { setNotifier } from './engine/notify';
 import { startEngine, engineState } from './engine/listener';
 
@@ -26,10 +27,13 @@ async function main() {
   await bot.launch({ dropPendingUpdates: true });
   log('control plane up');
 
+  const me = await bot.telegram.getMe();
+  setBotUsername(me.username);
+  log(`username @${me.username}`);
+
   setNotifier((userId, text) =>
     bot.telegram.sendMessage(userId, text, {
-      parse_mode: 'Markdown',
-      link_preview_options: { is_disabled: true },
+      parse_mode: 'Markdown', link_preview_options: { is_disabled: true },
     }));
 
   await startEngine();
