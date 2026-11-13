@@ -13,12 +13,16 @@ export async function authGuard(ctx: Context, next: Next) {
   const payload = (ctx as any).startPayload as string | undefined;
   if (payload) {
     const claim = await db.query(
-      `UPDATE invite_codes SET used_by=$1 WHERE code=$2 AND used_by IS NULL RETURNING code`,
+      `UPDATE invite_codes SET used_by=$1
+       WHERE code=$2 AND used_by IS NULL AND expires_at > NOW() RETURNING code`,
       [id, payload.toUpperCase()],
     );
     if (claim.rowCount) {
-      await db.query(`INSERT INTO authorized_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
-      await ctx.reply('✅ Authorized. Send /menu');
+      await db.query(
+        `INSERT INTO authorized_users (user_id, username) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [id, ctx.from?.username ?? null],
+      );
+      await ctx.reply('✅ Authorized. Send /help');
       return;
     }
   }
