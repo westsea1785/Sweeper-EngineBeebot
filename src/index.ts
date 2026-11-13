@@ -1,27 +1,27 @@
-import * as dotenv from 'dotenv';
-import { setupBot } from './bot';
-import { initializeDatabase } from './config/db';
-import { startSweeperEngine } from './engine/listener';
+import { ENV } from './config/env';
+import { migrate } from './config/db';
+import { buildBot } from './bot';
+import { setNotifier } from './engine/notify';
+import { startEngine } from './engine/listener';
 
-dotenv.config();
+async function main() {
+  console.log('booting…');
+  await migrate();
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  const bot = buildBot();
+  await bot.launch();
+  setNotifier((userId, text) =>
+    bot.telegram.sendMessage(userId, text, {
+      parse_mode: 'Markdown',
+      link_preview_options: { is_disabled: true },
+    }));
+  console.log('control plane up');
 
-async function bootstrap() {
-    console.log("🚀 Booting Sweeper Engine...");
+  await startEngine();
 
-    await initializeDatabase();
-
-    if (!TELEGRAM_TOKEN) throw new Error("Missing TELEGRAM_BOT_TOKEN");
-    const bot = setupBot(TELEGRAM_TOKEN);
-    bot.launch();
-    console.log("✅ Telegram Control Plane Active");
-
-    // Boot the execution engine
-    await startSweeperEngine();
-
-    process.once('SIGINT', () => bot.stop('SIGINT'));
-    process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  const stop = (s: string) => { console.log(`${s} — exit`); bot.stop(s); process.exit(0); };
+  process.once('SIGINT', () => stop('SIGINT'));
+  process.once('SIGTERM', () => stop('SIGTERM'));
 }
 
-bootstrap().catch(console.error);
+main().catch(e => { console.error(e); process.exit(1); });
