@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
+import { encodeFunctionData, erc20Abi } from 'viem';
 import { ENV } from '../config/env';
 import { CHAIN, MAX_UINT } from '../config/constants';
 
@@ -101,12 +102,20 @@ export const verify = (s: SessionRef, qrCodeId: string) =>
     call(s, ['auth', 'verify', '--qrCodeId', qrCodeId], 330000);
 
 export async function grantAllowance(s: SessionRef, token: string, puller: string, fromAddress: string) {
+    // ABI-encode the approve(address,uint256) function call for --inputData
+    const inputData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [puller as `0x${string}`, BigInt(MAX_UINT)],
+    });
+
     const p = await call<{ data: { requestId: string } }>(s, [
-        'contract-call', 'preview', '--binanceChainId', CHAIN,
+        'contract-call', 'preview',
+        '--binanceChainId', CHAIN,
         '--from', fromAddress,
         '--to', token,
-        'function', 'approve(address,uint256)',
-        '--args', `${puller},${MAX_UINT}`,
+        '--value', '0',
+        '--inputData', inputData,
     ], 25000);
 
     await call(s, [
