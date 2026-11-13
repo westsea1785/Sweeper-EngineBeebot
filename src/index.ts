@@ -23,31 +23,36 @@ async function main() {
   });
   server.listen(Number(process.env.PORT) || 3000, () => log('health server up'));
 
+  try {
+    log(`baw ${await checkBaw()}`);
+  } catch (e: any) {
+    log(`BAW MISSING: ${e.message}`);
+  }
+
+  // engine first — a hung bot.launch() must not stop sweeping
+  await startEngine();
+  log('engine started');
+
   const bot = buildBot();
   log('bot built');
-  await bot.launch({ dropPendingUpdates: true });
-  log('control plane up');
 
-  const me = await bot.telegram.getMe();
-  setBotUsername(me.username);
-  log(`username @${me.username}`);
+  void bot.launch({ dropPendingUpdates: true })
+    .then(async () => {
+      log('control plane up');
+      const me = await bot.telegram.getMe();
+      setBotUsername(me.username);
+      log(`username @${me.username}`);
+    })
+    .catch(e => log(`LAUNCH FAILED: ${e.message}`));
 
   setNotifier((userId, text) =>
     bot.telegram.sendMessage(userId, text, {
       parse_mode: 'HTML', link_preview_options: { is_disabled: true },
     }));
 
-  try {
-    log(`baw ${await checkBaw()}`);
-  } catch (e: any) {
-    log(`BAW MISSING: ${e.message}`);
-    await bot.telegram.sendMessage(ENV.ADMIN_ID,
-      `🚨 <b>baw is not installed</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' })
-      .catch(() => {});
-  }
-
-  await startEngine();
-  log('engine started');
+  setInterval(() => {
+    console.log(`[hb] armed=${engineState.armed} targets=${engineState.targets} block=${engineState.lastBlock}`);
+  }, 60_000);
 
   const stop = (s: string) => { log(`${s} exit`); bot.stop(s); server.close(); process.exit(0); };
   process.once('SIGINT', () => stop('SIGINT'));
