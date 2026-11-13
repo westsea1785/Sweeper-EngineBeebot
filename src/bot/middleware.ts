@@ -7,15 +7,14 @@ export async function authGuard(ctx: Context, next: Next) {
   if (!id) return;
   if (id === ENV.ADMIN_ID) return next();
 
-  const { rows } = await db.query(`SELECT 1 FROM authorized_users WHERE user_id = $1`, [id]);
+  const { rows } = await db.query(`SELECT 1 FROM authorized_users WHERE user_id=$1`, [id]);
   if (rows.length) return next();
 
-  const text = (ctx.message as any)?.text as string | undefined;
-  const code = text?.split(' ')[1] || (ctx as any).startPayload;
-  if (code) {
+  const payload = (ctx as any).startPayload as string | undefined;
+  if (payload) {
     const claim = await db.query(
-      `UPDATE invite_codes SET used_by = $1 WHERE code = $2 AND used_by IS NULL RETURNING code`,
-      [id, code.toUpperCase()],
+      `UPDATE invite_codes SET used_by=$1 WHERE code=$2 AND used_by IS NULL RETURNING code`,
+      [id, payload.toUpperCase()],
     );
     if (claim.rowCount) {
       await db.query(`INSERT INTO authorized_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
