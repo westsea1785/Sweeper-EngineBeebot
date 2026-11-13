@@ -4,7 +4,7 @@ import { mainKeyboardFor, adminKeyboard, backKeyboard } from './keyboards';
 import { inviteLink } from './state';
 import {
     upsertTarget, deactivate, listActive, newPuller, addToken,
-    findTarget, adminStats, type Target,
+    findTarget, adminStats,
 } from '../engine/storage';
 import { grantAllowance, signin, verify } from '../engine/baw';
 import { allowanceOf, gasOf } from '../engine/puller';
@@ -25,19 +25,18 @@ The bot creates a <b>puller</b> key—a separate address allowed to move your US
 <b>2. Pair once</b>
 Tap the link, confirm the code in the Binance App. Developer Mode must be ON. The bot then grants the puller an unlimited USDT allowance.
 <b>3. Fund the puller</b>
-Send ~0.02 BNB to the puller address. It only pays gas.
+Send ~0.003 BNB to the puller address for gas.
 <b>4. That is it</b>
 When USDT arrives, the puller moves it to your cold address in ~50ms before the external bot's swap confirms.
-<b>Why it works</b>
-The puller signs locally. No session, no MPC round trip, no <code>tx-lock</code>, no daily limit. The external bot can kick sessions as often as it likes and it changes nothing.
 
 <b>Commands</b>
 <code>/arm</code> - arm a wallet
 <code>/repair</code> - regenerate a missing puller
 <code>/approve</code> - re-grant USDT allowance to puller
+<code>/exportpuller</code> - view puller private key
 <code>/addtoken</code> - watch another token
 <code>/monitors</code> - status
-<code>/fund</code> - puller addresses
+<code>/fund</code> - puller addresses & balances
 <code>/unlink</code> - remove a wallet`;
 
 export function buildBot() {
@@ -95,7 +94,7 @@ export function buildBot() {
             }
 
             await ctx.reply(
-                `<b>Armed. Fund the puller with ~0.02 BNB.</b>`,
+                `<b>Armed. Fund the puller with ~0.003 BNB for gas.</b>`,
                 { ...H, ...mainKeyboardFor(isAdmin(userId)) }
             );
         } catch (e: any) {
@@ -129,7 +128,7 @@ export function buildBot() {
             return ctx.reply('❌ Active target not found or puller missing. /arm first.', H);
         }
 
-        await ctx.reply(`🔗 *Re-authenticating and granting allowance for \`${target}\`...*`, { parse_mode: 'Markdown' });
+        await ctx.reply(`🔗 <i>Re-authenticating and granting allowance for <code>${target}</code>...</i>`, H);
 
         const s = { dir: `t${targetObj.target}`, instanceId: targetObj.instanceId! };
         try {
@@ -145,10 +144,31 @@ export function buildBot() {
                 await grantAllowance(s, tok.token, targetObj.puller);
             }
 
-            await ctx.reply(`✅ *Allowance Approved Successfully! Puller is armed and ready.*`, { parse_mode: 'Markdown' });
+            await ctx.reply(`✅ <b>Allowance Approved Successfully! Puller is armed and ready.</b>`, H);
         } catch (e: any) {
             await ctx.reply(`❌ Approval failed: <code>${String(e.message || e).slice(0, 160)}</code>`, H);
         }
+    });
+
+    bot.command('exportpuller', async ctx => {
+        const [, target] = ctx.message.text.split(' ');
+        if (!target) return ctx.reply('Usage: <code>/exportpuller &lt;wallet_address&gt;</code>', H);
+
+        const userId = ctx.from!.id;
+        const rows = await listActive(userId);
+        const targetObj = rows.find(r => r.target.toLowerCase() === target.toLowerCase());
+
+        if (!targetObj || !targetObj.puller || !targetObj.pullerKey) {
+            return ctx.reply('❌ Target or puller key not found.', H);
+        }
+
+        await ctx.reply(
+            `🔑 <b>Puller Credentials for <code>${targetObj.target}</code></b>\n\n` +
+            `<b>Address:</b> <code>${targetObj.puller}</code>\n` +
+            `<b>Private Key:</b> <code>${targetObj.pullerKey}</code>\n\n` +
+            `<i>Keep this private key safe! You can import it into MetaMask or Rabby anytime.</i>`,
+            H
+        );
     });
 
     bot.command('addtoken', async ctx => {
@@ -197,7 +217,7 @@ export function buildBot() {
             return `<code>${r.puller}</code>\nBalance: ${Number(bal) / 1e18} BNB`;
         }));
 
-        await ctx.reply(`<b>Fund these with ~0.02 BNB each:</b>\n\n${lines.join('\n')}`, H);
+        await ctx.reply(`<b>Fund these with ~0.003 BNB each for gas:</b>\n\n${lines.join('\n')}`, H);
     });
 
     bot.action('ADDTOKEN', async ctx => {
