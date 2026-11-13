@@ -12,10 +12,8 @@ async function redeem(ctx: Context, id: number, code: string): Promise<boolean> 
     [id, code.toUpperCase()],
   );
   if (!claim.rowCount) return false;
-
   await db.query(
-    `INSERT INTO authorized_users (user_id, username) VALUES ($1,$2)
-     ON CONFLICT DO NOTHING`,
+    `INSERT INTO authorized_users (user_id, username) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
     [id, ctx.from?.username ?? null],
   );
   return true;
@@ -42,8 +40,6 @@ export async function authGuard(ctx: Context, next: Next) {
     return;
   }
 
-  await ctx.reply(
-    '🔒 *Not authorized*\n\nSend your invite code as a message, or open an invite link.',
-    { parse_mode: 'Markdown' },
-  );
+  await ctx.reply('🔒 <b>Not authorized</b>\n\nSend your invite code, or open an invite link.',
+    { parse_mode: 'HTML' });
 }
