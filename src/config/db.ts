@@ -27,18 +27,25 @@ export async function migrate() {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS sweep_targets (
-        id                    SERIAL PRIMARY KEY,
-        user_id               BIGINT NOT NULL,
-        target_address        VARCHAR(42) NOT NULL,
-        destination_address   VARCHAR(42) NOT NULL,
-        puller_address        VARCHAR(42),
-        encrypted_puller_key  TEXT,
-        is_agentic            BOOLEAN NOT NULL DEFAULT false,
-        baw_instance_id       TEXT,
-        allowance_ok          BOOLEAN NOT NULL DEFAULT false,
-        is_active             BOOLEAN NOT NULL DEFAULT true,
-        created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        id                   SERIAL PRIMARY KEY,
+        user_id              BIGINT NOT NULL,
+        target_address       VARCHAR(42) NOT NULL,
+        destination_address  VARCHAR(42) NOT NULL,
+        puller_address       VARCHAR(42),
+        encrypted_puller_key TEXT,
+        is_agentic           BOOLEAN NOT NULL DEFAULT false,
+        baw_instance_id      TEXT,
+        is_active            BOOLEAN NOT NULL DEFAULT true,
+        created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (user_id, target_address)
+      );
+      CREATE TABLE IF NOT EXISTS target_tokens (
+        id            SERIAL PRIMARY KEY,
+        target_id     INTEGER NOT NULL REFERENCES sweep_targets(id) ON DELETE CASCADE,
+        token_address VARCHAR(42) NOT NULL,
+        allowance_ok  BOOLEAN NOT NULL DEFAULT false,
+        created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (target_id, token_address)
       );
       CREATE INDEX IF NOT EXISTS sweep_targets_active_idx
         ON sweep_targets (is_active) WHERE is_active;
