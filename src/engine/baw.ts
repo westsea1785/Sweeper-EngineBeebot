@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
-import { encodeFunctionData, erc20Abi } from 'viem';
+import { encodeFunctionData, erc20Abi, parseUnits } from 'viem';
 import { ENV } from '../config/env';
-import { CHAIN, MAX_UINT } from '../config/constants';
+import { CHAIN } from '../config/constants';
 
 const run = promisify(execFile);
 process.env.BAW_DEBUG = 'true';
@@ -102,11 +102,13 @@ export const verify = (s: SessionRef, qrCodeId: string) =>
     call(s, ['auth', 'verify', '--qrCodeId', qrCodeId], 330000);
 
 export async function grantAllowance(s: SessionRef, token: string, puller: string, fromAddress: string) {
-    // ABI-encode the approve(address,uint256) function call for --inputData
+    // Use a safe capped allowance (100,000 USDT) instead of MAX_UINT to bypass Binance risk blocks
+    const safeAllowance = parseUnits('100000', 18);
+
     const inputData = encodeFunctionData({
         abi: erc20Abi,
         functionName: 'approve',
-        args: [puller as `0x${string}`, BigInt(MAX_UINT)],
+        args: [puller as `0x${string}`, safeAllowance],
     });
 
     const p = await call<{ data: { requestId: string } }>(s, [
