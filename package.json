@@ -1,13 +1,12 @@
 {
   "name": "sweeper-engine",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "watch-session": "tsx src/scripts/watch-session.ts"
   },
@@ -16,12 +15,10 @@
     "ioredis": "^5.4.1",
     "pg": "^8.12.0",
     "telegraf": "^4.16.3",
-    "viem": "^2.21.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.14.0",
-    "@types/pg": "^8.11.6",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "viem": "^2.21.0",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6"
   }
 }
