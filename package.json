@@ -1,12 +1,13 @@
 {
   "name": "sweeper-engine",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
+    "build": "npm install -g @binance/agentic-wallet@1.12.0 && baw --version",
+    "start": "mkdir -p \"${BAW_ROOT:-/data/baw}\"; cp -n ./keytar-off.mjs \"${BAW_ROOT:-/data/baw}/\" 2>/dev/null; tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "watch-session": "tsx src/scripts/watch-session.ts"
   },
