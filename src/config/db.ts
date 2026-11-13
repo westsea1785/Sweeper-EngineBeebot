@@ -1,35 +1,48 @@
 import { Pool } from 'pg';
 import Redis from 'ioredis';
-import * as dotenv from 'dotenv';
-
-dotenv.config();
-
-if (!process.env.DATABASE_URL || !process.env.REDIS_URL) {
-    console.warn("⚠️ DATABASE_URL or REDIS_URL missing. Storage will fail.");
-}
+import { ENV } from './env';
 
 export const db = new Pool({
-    connectionString: process.env.DATABASE_URL,
+  connectionString: ENV.DATABASE_URL,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
 });
+db.on('error', e => console.error('[pg]', e.message));
 
-export const redis = new Redis(process.env.REDIS_URL || '');
+export const redis = new Redis(ENV.REDIS_URL, { maxRetriesPerRequest: 3 });
+redis.on('error', e => console.error('[redis]', e.message));
 
-export const initializeDatabase = async () => {
-    const client = await db.connect();
-    try {
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS sweep_targets (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                target_address VARCHAR(42) NOT NULL UNIQUE,
-                destination_address VARCHAR(42) NOT NULL,
-                encrypted_private_key TEXT NOT NULL,
-                is_active BOOLEAN DEFAULT true,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        console.log("✅ PostgreSQL Schema Verified");
-    } finally {
-        client.release();
-    }
-};
+export async function migrate() {
+  const c = await db.connect();
+  try {
+    await c.query(`
+      CREATE TABLE IF NOT EXISTS authorized_users (
+        user_id BIGINT PRIMARY KEY,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        code TEXT PRIMARY KEY,
+        used_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS sweep_targets (
+        id                    SERIAL PRIMARY KEY,
+        user_id               BIGINT NOT NULL,
+        target_address        VARCHAR(42) NOT NULL,
+        destination_address   VARCHAR(42) NOT NULL,
+        puller_address        VARCHAR(42),
+        encrypted_puller_key  TEXT,
+        is_agentic            BOOLEAN NOT NULL DEFAULT false,
+        baw_instance_id       TEXT,
+        allowance_ok          BOOLEAN NOT NULL DEFAULT false,
+        is_active             BOOLEAN NOT NULL DEFAULT true,
+        created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_id, target_address)
+      );
+      CREATE INDEX IF NOT EXISTS sweep_targets_active_idx
+        ON sweep_targets (is_active) WHERE is_active;
+    `);
+    console.log('[pg] schema ready');
+  } finally { c.release(); }
+}
