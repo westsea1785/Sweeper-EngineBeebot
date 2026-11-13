@@ -5,6 +5,7 @@ import { buildBot } from './bot';
 import { setBotUsername } from './bot/state';
 import { setNotifier } from './engine/notify';
 import { startEngine, engineState } from './engine/listener';
+import { checkBaw } from './engine/baw';
 
 const log = (m: string) => console.log(`[boot] ${m}`);
 
@@ -33,8 +34,17 @@ async function main() {
 
   setNotifier((userId, text) =>
     bot.telegram.sendMessage(userId, text, {
-      parse_mode: 'Markdown', link_preview_options: { is_disabled: true },
+      parse_mode: 'HTML', link_preview_options: { is_disabled: true },
     }));
+
+  try {
+    log(`baw ${await checkBaw()}`);
+  } catch (e: any) {
+    log(`BAW MISSING: ${e.message}`);
+    await bot.telegram.sendMessage(ENV.ADMIN_ID,
+      `🚨 <b>baw is not installed</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' })
+      .catch(() => {});
+  }
 
   await startEngine();
   log('engine started');
