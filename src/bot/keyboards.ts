@@ -2,8 +2,8 @@ export const mainKeyboard = {
   reply_markup: {
     inline_keyboard: [
       [{ text: '📡 Monitors', callback_data: 'MONITORS' }],
-      [{ text: '➕ New Puller', callback_data: 'NEW_PULLER' }],
-      [{ text: '🔄 Status', callback_data: 'STATUS' }],
+      [{ text: '⛽ Puller addresses', callback_data: 'FUND' }],
+      [{ text: '➕ Add token', callback_data: 'ADDTOKEN' }],
     ],
   },
 };
