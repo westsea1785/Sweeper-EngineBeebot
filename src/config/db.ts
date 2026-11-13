@@ -19,11 +19,13 @@ export async function migrate() {
     await c.query(`
       CREATE TABLE IF NOT EXISTS authorized_users (
         user_id BIGINT PRIMARY KEY,
+        username TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS invite_codes (
         code TEXT PRIMARY KEY,
         used_by BIGINT,
+        expires_at TIMESTAMP NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS sweep_targets (
@@ -49,6 +51,9 @@ export async function migrate() {
       );
       CREATE INDEX IF NOT EXISTS sweep_targets_active_idx
         ON sweep_targets (is_active) WHERE is_active;
+      ALTER TABLE authorized_users ADD COLUMN IF NOT EXISTS username TEXT;
+      ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS expires_at
+        TIMESTAMP NOT NULL DEFAULT (NOW() + INTERVAL '24 hours');
     `);
     console.log('[pg] schema ready');
   } finally { c.release(); }
