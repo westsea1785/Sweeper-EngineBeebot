@@ -6,6 +6,7 @@ import { CHAIN, MAX_UINT } from '../config/constants';
 
 const run = promisify(execFile);
 const HOOK = `${ENV.BAW_ROOT}/keytar-off.mjs`;
+const DEBUG = process.env.BAW_DEBUG === 'true';
 
 export interface SessionRef { dir: string; instanceId: string }
 
@@ -16,26 +17,53 @@ const envFor = (s: SessionRef) => ({
   ...(existsSync(HOOK) ? { NODE_OPTIONS: `--import ${HOOK}` } : {}),
 });
 
+/** The CLI pretty-prints JSON. Slice from the first { to the last } instead of line-parsing. */
+function extractJson<T>(stdout: string): T {
+  const t = stdout.trim();
+  const attempt = (s: string): T | undefined => {
+    try { return JSON.parse(s) as T; } catch { return undefined; }
+  };
+
+  const direct = attempt(t);
+  if (direct !== undefined) return direct;
+
+  const start = t.search(/[[{]/);
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (start >= 0 && end > start) {
+    const sliced = attempt(t.slice(start, end + 1));
+    if (sliced !== undefined) return sliced;
+  }
+  throw new Error('unparseable baw output: ' + t.slice(0, 300));
+}
+
 export async function checkBaw(): Promise<string> {
   const { stdout } = await run(ENV.BAW_BIN, ['--version'], { timeout: 15000 });
   return stdout.trim();
 }
 
 export async function call<T = any>(s: SessionRef, args: string[], timeout = 20000): Promise<T> {
-  let stdout: string;
+  let stdout = '';
+  let stderr = '';
   try {
-    ({ stdout } = await run(ENV.BAW_BIN, [...args, '--json'], {
-      env: envFor(s), timeout, maxBuffer: 4 << 20,
-    }));
+    const r = await run(ENV.BAW_BIN, [...args, '--json'], {
+      env: envFor(s), timeout, maxBuffer: 8 << 20,
+    });
+    stdout = r.stdout; stderr = r.stderr;
   } catch (e: any) {
     if (e.code === 'ENOENT') {
-      throw new Error(`baw not installed (${ENV.BAW_BIN}) — build step must run npm i -g @binance/agentic-wallet`);
+      throw new Error(`baw not installed (${ENV.BAW_BIN})`);
     }
-    throw e;
+    stdout = e.stdout ?? ''; stderr = e.stderr ?? '';
+    if (DEBUG) console.error('[baw:err]', args[0], stderr.slice(0, 500));
+    if (!stdout.trim()) throw new Error(stderr.slice(0, 300) || e.message);
   }
-  const line = stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
-  if (!line) throw new Error('no JSON from baw: ' + stdout.slice(0, 200));
-  return JSON.parse(line) as T;
+
+  if (DEBUG) console.log('[baw:out]', args[0], stdout.slice(0, 800));
+  const parsed = extractJson<T & { success?: boolean; error?: { message?: string } }>(stdout);
+  if (parsed && parsed.success === false) {
+    throw new Error(parsed.error?.message || 'baw returned success:false');
+  }
+  return parsed;
 }
 
 export const status = (s: SessionRef) => call(s, ['wallet', 'status'], 8000);
@@ -55,7 +83,7 @@ export const sendMax = (s: SessionRef, asset: string, dest: string) =>
 
 export const signin = (s: SessionRef) =>
   call<{ data: { urlForWeb: string; pairingCode: string; qrCodeId: string } }>(
-    s, ['auth', 'signin'], 15000);
+    s, ['auth', 'signin'], 20000);
 
 export const verify = (s: SessionRef, qrCodeId: string) =>
   call(s, ['auth', 'verify', '--qrCodeId', qrCodeId], 330000);
