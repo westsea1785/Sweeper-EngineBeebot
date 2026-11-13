@@ -1,37 +1,20 @@
-import crypto from 'crypto';
-import * as dotenv from 'dotenv';
+import crypto from 'node:crypto';
+import { ENV } from '../config/env';
 
-dotenv.config();
+const KEY = Buffer.from(ENV.ENCRYPTION_KEY, 'hex');
+const ALG = 'aes-256-gcm';
 
-// Must be exactly 64 hex characters (32 bytes). You will set this in Railway variables.
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
-const ALGORITHM = 'aes-256-gcm';
+export function encrypt(plain: string): string {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv(ALG, KEY, iv);
+  let out = c.update(plain, 'utf8', 'hex');
+  out += c.final('hex');
+  return `${iv.toString('hex')}:${out}:${c.getAuthTag().toString('hex')}`;
+}
 
-export const encryptKey = (privateKey: string): string => {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    
-    let encrypted = cipher.update(privateKey, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-    
-    // Format: iv:ciphertext:authTag
-    return `${iv.toString('hex')}:${encrypted}:${authTag}`;
-};
-
-export const decryptKey = (encryptedData: string): string => {
-    const [ivHex, encryptedHex, authTagHex] = encryptedData.split(':');
-    
-    const decipher = crypto.createDecipheriv(
-        ALGORITHM, 
-        Buffer.from(ENCRYPTION_KEY, 'hex'), 
-        Buffer.from(ivHex, 'hex')
-    );
-    
-    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
-    
-    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    
-    return decrypted;
-};
+export function decrypt(data: string): string {
+  const [iv, body, tag] = data.split(':');
+  const d = crypto.createDecipheriv(ALG, KEY, Buffer.from(iv, 'hex'));
+  d.setAuthTag(Buffer.from(tag, 'hex'));
+  return d.update(body, 'hex', 'utf8') + d.final('utf8');
+}
