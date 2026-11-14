@@ -6,6 +6,7 @@ import { setBotUsername } from './bot/state';
 import { setNotifier } from './engine/notify';
 import { startEngine, engineState } from './engine/listener';
 import { checkBaw } from './engine/baw';
+import { ensureRouterDeployed } from './engine/deployer';
 
 const log = (m: string) => console.log(`[boot] ${m}`);
 
@@ -13,6 +14,9 @@ async function main() {
   log('start');
   await migrate();
   log('db ok');
+
+  // Automatically check and deploy the verified router contract on startup
+  await ensureRouterDeployed();
 
   const server = http.createServer((req, res) => {
     if (req.url === '/health') {
