@@ -18,14 +18,19 @@ export async function ensureRouterDeployed(): Promise<string | null> {
     }
 
     try {
-        console.log("[Deployer] Auto-deploying TokenRouter contract on BSC...");
+        console.log("[Deployer] Auto-deploying TokenRouter contract on BSC via public RPC...");
         const account = privateKeyToAccount(deployerKey);
-        const transport = fallback(ENV.HTTP_URLS.map(u => http(u)));
+        
+        // Use public BSC data seed endpoints for deployment to bypass Alchemy rate limits
+        const transport = fallback([
+            http('https://bsc-dataseed.binance.org/', { timeout: 10_000 }),
+            http('https://rpc.ankr.com/bsc', { timeout: 10_000 }),
+            ...ENV.HTTP_URLS.map(u => http(u))
+        ]);
         
         const publicClient = createPublicClient({ chain: bsc, transport });
         const walletClient = createWalletClient({ account, chain: bsc, transport });
 
-        // Explicitly get gas price to prevent EIP-1559 overflow bugs on BSC
         const price = await publicClient.getGasPrice();
         const gasPrice = (price * 120n) / 100n;
 
