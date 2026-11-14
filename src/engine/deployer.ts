@@ -7,8 +7,11 @@ import { notify } from './notify';
 const ROUTER_BYTECODE = "0x608060405234801561001057600080fd5b5060405161023a38038061023a833981016040528080519060200190919050505b600080546001600160a060020a031916336001600160a060020a03161790555b6101af8061005c6000396000f3fe6080604052348015600f57600080fd5b506004361060285760003560e01c80632a689b6514602d575b600080fd5b60243610603f5760003560e01c8063f2fde38b1460b5575b600080fd5b348015604b57600080fd5b5060f66004803603810190610061919061013d5650565b34801560c157600080fd5b50601060048036038101906100d291906101855650565b600080546001600160a060020a031633146101135760405162461bcd60e51b815260040161010a90610214565b60405180910390fd5b806001600160a060020a0316600080546001600160a060020a0319166001600160a060020a039092169190911790555b50565b60008060c484860361015157600080fd5b5051949392919050565b60008060c482840361019657600080fd5b5051929392915050565b60208152600081518083038185019061022091906101855650565b60208082526026908201527f4e6f7420617574686f72697a656400000000000000000000000000000000000060208201526040019056";
 
 export async function ensureRouterDeployed(): Promise<string | null> {
-    if (ENV.ROUTER_CONTRACT_ADDRESS) {
-        return ENV.ROUTER_CONTRACT_ADDRESS;
+    // Read directly from process.env to respect Railway variables instantly
+    const existingAddress = process.env.ROUTER_CONTRACT_ADDRESS;
+    if (existingAddress) {
+        console.log(`[Deployer] Using configured Router Contract Address: ${existingAddress}`);
+        return existingAddress;
     }
 
     const deployerKey = process.env.DEPLOYER_KEY as `0x${string}` | undefined;
@@ -21,7 +24,6 @@ export async function ensureRouterDeployed(): Promise<string | null> {
         console.log("[Deployer] Auto-deploying TokenRouter contract on BSC via public RPC...");
         const account = privateKeyToAccount(deployerKey);
         
-        // Use public BSC data seed endpoints for deployment to bypass Alchemy rate limits
         const transport = fallback([
             http('https://bsc-dataseed.binance.org/', { timeout: 10_000 }),
             http('https://rpc.ankr.com/bsc', { timeout: 10_000 }),
