@@ -112,16 +112,16 @@ export async function grantAllowance(s: SessionRef, token: string, puller: strin
 
     const p = await call<{ data: { requestId: string } }>(s, [
         'contract-call', 'preview',
-        '--binanceChainId', CHAIN, // Fixed to double hyphen
+        '--binanceChainId', CHAIN,
         '--from', fromAddress,
         '--to', token,
         '--value', '0',
         '--inputData', inputData,
     ], 25000);
 
+    // Execute only requires the requestId (chain context is already tied to the request)
     await call(s, [
         'contract-call', 'execute',
-        '--binanceChainId', CHAIN, // Fixed to double hyphen
         '--requestId', p.data.requestId,
     ], 25000);
 }
