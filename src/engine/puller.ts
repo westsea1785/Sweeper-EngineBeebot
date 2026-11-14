@@ -33,7 +33,6 @@ export async function pullone(
 
     const amount = bal < allow ? bal : allow;
     const price = await pub.getGasPrice();
-    // BSC uses standard legacy gasPrice instead of EIP-1559 tip parameters
     const gasPrice = (price * 120n) / 100n;
 
     const wallet = createWalletClient({ account, chain: bsc, transport: transport() });
