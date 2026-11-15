@@ -2,7 +2,7 @@ import { Telegraf } from 'telegraf';
 import { authGuard } from './middleware';
 import { mainKeyboardFor, adminKeyboard, backKeyboard } from './keyboards';
 import { inviteLink } from './state';
-import { upsertTarget, deactivate, listActive, adminStats } from '../engine/storage';
+import { upsertTarget, deactivate, listActive, adminStats, newPuller } from '../engine/storage';
 import { gasof } from '../engine/puller';
 import { engineState } from '../engine/listener';
 import { ENV } from '../config/env';
@@ -53,7 +53,7 @@ export function buildBot() {
         const [, target, cold] = ctx.message.text.split(' ');
         if (!target || !cold) return ctx.reply('Usage: <code>/arm &lt;agentic_wallet&gt; &lt;cold&gt;</code>', H);
         const userId = ctx.from!.id;
-        const { address: puller, key } = require('../engine/storage').newPuller(); // dynamically handle puller generation
+        const { address: puller, key } = newPuller();
 
         await upsertTarget({ userId, target, destination: cold, puller, pullerKey: key });
 
