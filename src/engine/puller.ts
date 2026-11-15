@@ -11,11 +11,14 @@ const transport = () =>
 
 export const pub = createPublicClient({ chain: bsc, transport: transport() });
 
+// Aliased exports to support both camelCase and lowercase imports across listener.ts
 export const allowanceOf = (owner: `0x${string}`, spender: `0x${string}`, token: `0x${string}`) =>
     pub.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, spender] });
+export const allowanceof = allowanceOf;
 
 export const balanceOf = (owner: `0x${string}`, token: `0x${string}`) =>
     pub.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] });
+export const balanceof = balanceOf;
 
 export const gasof = (addr: `0x${string}`) => pub.getBalance({ address: addr });
 
